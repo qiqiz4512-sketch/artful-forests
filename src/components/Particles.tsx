@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { ThemeColors } from '@/hooks/useTimeTheme';
 
+export type WeatherType = 'sunny' | 'rain' | 'snow';
+
 interface Particle {
   x: number;
   y: number;
@@ -10,13 +12,15 @@ interface Particle {
   opacity: number;
   phase: number;
   hue: number;
+  length?: number; // for rain streaks
 }
 
 interface Props {
   colors: ThemeColors;
+  weather: WeatherType;
 }
 
-export default function Particles({ colors }: Props) {
+export default function Particles({ colors, weather }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const particlesRef = useRef<Particle[]>([]);
   const animRef = useRef<number>(0);
@@ -27,8 +31,10 @@ export default function Particles({ colors }: Props) {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
-    const count = colors.particleType === 'firefly' ? 25 : 20;
-    particlesRef.current = Array.from({ length: count }, () => createParticle(canvas.width, canvas.height, colors.particleType));
+    const count = getParticleCount(colors.particleType, weather);
+    particlesRef.current = Array.from({ length: count }, () =>
+      createParticle(canvas.width, canvas.height, colors.particleType, weather)
+    );
 
     const onResize = () => {
       canvas.width = window.innerWidth;
@@ -38,17 +44,27 @@ export default function Particles({ colors }: Props) {
 
     function animate() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Rain overlay tint
+      if (weather === 'rain') {
+        ctx.fillStyle = 'rgba(100, 120, 140, 0.06)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
       particlesRef.current.forEach((p) => {
         p.x += p.speedX;
         p.y += p.speedY;
         p.phase += 0.02;
 
-        if (p.y > canvas.height + 20 || p.x > canvas.width + 20 || p.x < -20) {
-          Object.assign(p, createParticle(canvas.width, canvas.height, colors.particleType));
-          p.y = -10;
+        // Reset when out of bounds
+        if (p.y > canvas.height + 30 || p.x > canvas.width + 30 || p.x < -30) {
+          Object.assign(p, createParticle(canvas.width, canvas.height, colors.particleType, weather));
+          p.y = -10 - Math.random() * 40;
+          if (weather === 'rain') p.x = Math.random() * canvas.width;
         }
 
-        if (colors.particleType === 'firefly') {
+        // Firefly (night, non-weather)
+        if (colors.particleType === 'firefly' && weather === 'sunny') {
           const glow = 0.3 + Math.sin(p.phase) * 0.7;
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
@@ -57,20 +73,61 @@ export default function Particles({ colors }: Props) {
           ctx.shadowBlur = 15;
           ctx.fill();
           ctx.shadowBlur = 0;
-        } else {
-          ctx.globalAlpha = p.opacity * (0.5 + Math.sin(p.phase) * 0.3);
-          ctx.beginPath();
-          // Draw petal shape
-          ctx.save();
-          ctx.translate(p.x, p.y);
-          ctx.rotate(p.phase);
-          ctx.ellipse(0, 0, p.size, p.size * 0.5, 0, 0, Math.PI * 2);
-          ctx.fillStyle = `hsla(${p.hue}, 60%, 80%, 0.7)`;
-          ctx.fill();
-          ctx.restore();
-          ctx.globalAlpha = 1;
+          return;
         }
+
+        // Rain
+        if (weather === 'rain') {
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(p.x + p.speedX * 2, p.y + (p.length || 12));
+          ctx.strokeStyle = `rgba(180, 200, 220, ${p.opacity * 0.6})`;
+          ctx.lineWidth = p.size * 0.4;
+          ctx.lineCap = 'round';
+          ctx.stroke();
+
+          // Splash at bottom
+          if (p.y > canvas.height - 30 && Math.random() < 0.03) {
+            ctx.beginPath();
+            ctx.arc(p.x, canvas.height - 5, 2, 0, Math.PI, true);
+            ctx.strokeStyle = `rgba(180, 200, 220, 0.3)`;
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
+          }
+          return;
+        }
+
+        // Snow
+        if (weather === 'snow') {
+          // Gentle horizontal drift
+          p.x += Math.sin(p.phase * 0.5) * 0.3;
+          ctx.globalAlpha = p.opacity * 0.85;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          // Soft white with slight blue tint
+          const brightness = 240 + Math.floor(Math.random() * 15);
+          ctx.fillStyle = `rgba(${brightness}, ${brightness}, 255, 0.9)`;
+          ctx.shadowColor = 'rgba(200, 210, 240, 0.4)';
+          ctx.shadowBlur = p.size * 2;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.globalAlpha = 1;
+          return;
+        }
+
+        // Default: petals (sunny daytime)
+        ctx.globalAlpha = p.opacity * (0.5 + Math.sin(p.phase) * 0.3);
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.phase);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, p.size, p.size * 0.5, 0, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${p.hue}, 60%, 80%, 0.7)`;
+        ctx.fill();
+        ctx.restore();
+        ctx.globalAlpha = 1;
       });
+
       animRef.current = requestAnimationFrame(animate);
     }
 
@@ -79,7 +136,7 @@ export default function Particles({ colors }: Props) {
       cancelAnimationFrame(animRef.current);
       window.removeEventListener('resize', onResize);
     };
-  }, [colors]);
+  }, [colors, weather]);
 
   return (
     <canvas
@@ -90,7 +147,41 @@ export default function Particles({ colors }: Props) {
   );
 }
 
-function createParticle(w: number, h: number, type: string): Particle {
+function getParticleCount(type: string, weather: WeatherType): number {
+  if (weather === 'rain') return 120;
+  if (weather === 'snow') return 60;
+  return type === 'firefly' ? 25 : 20;
+}
+
+function createParticle(w: number, h: number, type: string, weather: WeatherType): Particle {
+  if (weather === 'rain') {
+    return {
+      x: Math.random() * w,
+      y: -10 - Math.random() * h,
+      size: 1 + Math.random() * 1.5,
+      speedX: -1 - Math.random() * 0.5,
+      speedY: 10 + Math.random() * 8,
+      opacity: 0.3 + Math.random() * 0.5,
+      phase: Math.random() * Math.PI * 2,
+      hue: 210,
+      length: 8 + Math.random() * 14,
+    };
+  }
+
+  if (weather === 'snow') {
+    return {
+      x: Math.random() * w,
+      y: -10 - Math.random() * 100,
+      size: 1.5 + Math.random() * 3.5,
+      speedX: (Math.random() - 0.5) * 0.6,
+      speedY: 0.4 + Math.random() * 1.2,
+      opacity: 0.5 + Math.random() * 0.5,
+      phase: Math.random() * Math.PI * 2,
+      hue: 0,
+    };
+  }
+
+  // Default (sunny): petals or fireflies
   return {
     x: Math.random() * w,
     y: type === 'firefly' ? Math.random() * h : -10 - Math.random() * 100,
