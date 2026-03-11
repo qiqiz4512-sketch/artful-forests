@@ -115,11 +115,47 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
     setHasDrawn(false);
   }, []);
 
+  const autoCrop = useCallback((canvas: HTMLCanvasElement): string => {
+    const ctx = canvas.getContext('2d')!;
+    const { width, height } = canvas;
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const { data } = imageData;
+
+    let minX = width, minY = height, maxX = 0, maxY = 0;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const alpha = data[(y * width + x) * 4 + 3];
+        if (alpha > 0) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (maxX < minX || maxY < minY) return canvas.toDataURL('image/png');
+
+    const pad = 4;
+    minX = Math.max(0, minX - pad);
+    minY = Math.max(0, minY - pad);
+    maxX = Math.min(width - 1, maxX + pad);
+    maxY = Math.min(height - 1, maxY + pad);
+
+    const cropW = maxX - minX + 1;
+    const cropH = maxY - minY + 1;
+    const cropped = document.createElement('canvas');
+    cropped.width = cropW;
+    cropped.height = cropH;
+    cropped.getContext('2d')!.drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+    return cropped.toDataURL('image/png');
+  }, []);
+
   const handlePlant = useCallback(() => {
     if (!canvasRef.current || !hasDrawn) return;
-    const data = canvasRef.current.toDataURL('image/png');
+    const data = autoCrop(canvasRef.current);
     onPlant(data);
-  }, [hasDrawn, onPlant]);
+  }, [hasDrawn, onPlant, autoCrop]);
 
   return (
     <AnimatePresence>
