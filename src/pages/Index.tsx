@@ -191,6 +191,12 @@ export default function Index() {
       {/* Wind Chime */}
       <WindChime />
 
+      {/* Weather Toggle */}
+      <WeatherToggle
+        weather={weather}
+        onCycle={() => setWeather(w => w === 'sunny' ? 'rain' : w === 'rain' ? 'snow' : 'sunny')}
+      />
+
       {/* Seed Button */}
       <SeedButton onClick={() => setDrawingOpen(!drawingOpen)} isOpen={drawingOpen} />
 
