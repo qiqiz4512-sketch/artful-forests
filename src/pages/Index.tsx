@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import type { WeatherType } from '@/components/Particles';
 import { useTimeTheme } from '@/hooks/useTimeTheme';
 import ParallaxBackground from '@/components/ParallaxBackground';
 import Particles from '@/components/Particles';
@@ -8,6 +9,7 @@ import DrawingPanel from '@/components/DrawingPanel';
 import WindChime from '@/components/WindChime';
 import PlantedTree from '@/components/PlantedTree';
 import PlantingGhost from '@/components/PlantingGhost';
+import WeatherToggle from '@/components/WeatherToggle';
 
 interface TreeData {
   id: string;
@@ -25,6 +27,7 @@ export default function Index() {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [scrollX, setScrollX] = useState(0);
   const [newTreeId, setNewTreeId] = useState<string | null>(null);
+  const [weather, setWeather] = useState<WeatherType>('sunny');
   const containerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
   const dragStart = useRef(0);
@@ -173,7 +176,7 @@ export default function Index() {
       </div>
 
       {/* Particles */}
-      <Particles colors={colors} />
+      <Particles colors={colors} weather={weather} />
 
       {/* Planting ghost */}
       {plantingImage && (
@@ -187,6 +190,12 @@ export default function Index() {
 
       {/* Wind Chime */}
       <WindChime />
+
+      {/* Weather Toggle */}
+      <WeatherToggle
+        weather={weather}
+        onCycle={() => setWeather(w => w === 'sunny' ? 'rain' : w === 'rain' ? 'snow' : 'sunny')}
+      />
 
       {/* Seed Button */}
       <SeedButton onClick={() => setDrawingOpen(!drawingOpen)} isOpen={drawingOpen} />
