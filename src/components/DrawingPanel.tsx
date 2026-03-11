@@ -35,8 +35,7 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
   useEffect(() => {
     if (isOpen && canvasRef.current) {
       const ctx = canvasRef.current.getContext('2d')!;
-      ctx.fillStyle = 'rgba(255,255,252,0.95)';
-      ctx.fillRect(0, 0, 300, 300);
+      ctx.clearRect(0, 0, 300, 300);
       setHasDrawn(false);
     }
   }, [isOpen]);
