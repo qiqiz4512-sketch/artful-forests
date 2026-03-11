@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import type { WeatherType } from '@/components/Particles';
 import { useTimeTheme } from '@/hooks/useTimeTheme';
 import ParallaxBackground from '@/components/ParallaxBackground';
 import Particles from '@/components/Particles';
