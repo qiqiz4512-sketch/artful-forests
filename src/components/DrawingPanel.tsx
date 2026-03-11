@@ -35,8 +35,7 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
   useEffect(() => {
     if (isOpen && canvasRef.current) {
       const ctx = canvasRef.current.getContext('2d')!;
-      ctx.fillStyle = 'rgba(255,255,252,0.95)';
-      ctx.fillRect(0, 0, 300, 300);
+      ctx.clearRect(0, 0, 300, 300);
       setHasDrawn(false);
     }
   }, [isOpen]);
@@ -112,16 +111,51 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
   const clearCanvas = useCallback(() => {
     if (!canvasRef.current) return;
     const ctx = canvasRef.current.getContext('2d')!;
-    ctx.fillStyle = 'rgba(255,255,252,0.95)';
-    ctx.fillRect(0, 0, 300, 300);
+    ctx.clearRect(0, 0, 300, 300);
     setHasDrawn(false);
+  }, []);
+
+  const autoCrop = useCallback((canvas: HTMLCanvasElement): string => {
+    const ctx = canvas.getContext('2d')!;
+    const { width, height } = canvas;
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const { data } = imageData;
+
+    let minX = width, minY = height, maxX = 0, maxY = 0;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const alpha = data[(y * width + x) * 4 + 3];
+        if (alpha > 0) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (maxX < minX || maxY < minY) return canvas.toDataURL('image/png');
+
+    const pad = 4;
+    minX = Math.max(0, minX - pad);
+    minY = Math.max(0, minY - pad);
+    maxX = Math.min(width - 1, maxX + pad);
+    maxY = Math.min(height - 1, maxY + pad);
+
+    const cropW = maxX - minX + 1;
+    const cropH = maxY - minY + 1;
+    const cropped = document.createElement('canvas');
+    cropped.width = cropW;
+    cropped.height = cropH;
+    cropped.getContext('2d')!.drawImage(canvas, minX, minY, cropW, cropH, 0, 0, cropW, cropH);
+    return cropped.toDataURL('image/png');
   }, []);
 
   const handlePlant = useCallback(() => {
     if (!canvasRef.current || !hasDrawn) return;
-    const data = canvasRef.current.toDataURL('image/png');
+    const data = autoCrop(canvasRef.current);
     onPlant(data);
-  }, [hasDrawn, onPlant]);
+  }, [hasDrawn, onPlant, autoCrop]);
 
   return (
     <AnimatePresence>
@@ -156,6 +190,7 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
               style={{
                 border: '1.5px dashed rgba(160,150,130,0.4)',
                 borderRadius: '4px 8px 6px 10px',
+                background: 'repeating-conic-gradient(rgba(200,195,185,0.15) 0% 25%, transparent 0% 50%) 0 0 / 16px 16px',
               }}
               onMouseDown={startDraw}
               onMouseMove={draw}

@@ -65,7 +65,19 @@ export default function PlantedTree({ imageData, x, y, size, isNew }: Props) {
         src={imageData}
         alt="planted tree"
         className="w-full h-full object-contain pointer-events-none"
-        style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }}
+        style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))', background: 'transparent' }}
+      />
+
+      {/* Ground shadow */}
+      <div
+        className="absolute left-1/2 -translate-x-1/2 pointer-events-none"
+        style={{
+          bottom: -4,
+          width: '70%',
+          height: 8,
+          borderRadius: '50%',
+          background: 'radial-gradient(ellipse, rgba(0,0,0,0.10) 0%, transparent 70%)',
+        }}
       />
 
       <AnimatePresence>
