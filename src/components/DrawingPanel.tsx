@@ -190,6 +190,7 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
               style={{
                 border: '1.5px dashed rgba(160,150,130,0.4)',
                 borderRadius: '4px 8px 6px 10px',
+                background: 'repeating-conic-gradient(rgba(200,195,185,0.15) 0% 25%, transparent 0% 50%) 0 0 / 16px 16px',
               }}
               onMouseDown={startDraw}
               onMouseMove={draw}
