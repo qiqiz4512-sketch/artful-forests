@@ -9,6 +9,7 @@ import DrawingPanel from '@/components/DrawingPanel';
 import WindChime from '@/components/WindChime';
 import PlantedTree from '@/components/PlantedTree';
 import PlantingGhost from '@/components/PlantingGhost';
+import WeatherToggle from '@/components/WeatherToggle';
 
 interface TreeData {
   id: string;
