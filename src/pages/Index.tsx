@@ -176,7 +176,7 @@ export default function Index() {
       </div>
 
       {/* Particles */}
-      <Particles colors={colors} />
+      <Particles colors={colors} weather={weather} />
 
       {/* Planting ghost */}
       {plantingImage && (
