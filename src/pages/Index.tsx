@@ -27,6 +27,7 @@ export default function Index() {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [scrollX, setScrollX] = useState(0);
   const [newTreeId, setNewTreeId] = useState<string | null>(null);
+  const [weather, setWeather] = useState<WeatherType>('sunny');
   const containerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
   const dragStart = useRef(0);
