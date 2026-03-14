@@ -63,7 +63,7 @@ export default function WindChime() {
   return (
     <motion.button
       onClick={toggleMusic}
-      className="fixed top-6 left-6 z-40 w-11 h-11 flex items-center justify-center"
+      className="fixed top-6 right-6 z-40 w-11 h-11 flex items-center justify-center"
       style={{
         background: 'rgba(255,255,255,0.2)',
         backdropFilter: 'blur(8px)',

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Long+Cang&family=ZCOOL+KuaiLe&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -48,6 +48,9 @@
     --night-start: 232 73% 29%;
     --night-end: 231 44% 44%;
 
+    /* Handwritten font */
+    --font-handwritten: 'ZCOOL KuaiLe', cursive;
+
     --sidebar-background: 0 0% 98%;
     --sidebar-foreground: 240 5.3% 26.1%;
     --sidebar-primary: 240 5.9% 10%;
@@ -73,7 +76,7 @@
 
 @layer components {
   .font-handwriting {
-    font-family: 'Long Cang', cursive;
+    font-family: 'ZCOOL KuaiLe', cursive;
   }
 
   .font-ui {
@@ -168,5 +171,37 @@
   .tree-grow {
     animation: tree-grow 3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
     transform-origin: bottom center;
+  }
+
+  /* Manual-tree name singing effect */
+  .cute-float {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.01em;
+  }
+
+  .cute-float-char {
+    display: inline-block;
+    animation: cute-float 1.42s ease-in-out infinite;
+    will-change: transform;
+  }
+
+  @keyframes cute-float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    20% {
+      transform: translateY(-2.2px);
+    }
+    40% {
+      transform: translateY(1.1px);
+    }
+    62% {
+      transform: translateY(-1.6px);
+    }
+    82% {
+      transform: translateY(0.7px);
+    }
   }
 }

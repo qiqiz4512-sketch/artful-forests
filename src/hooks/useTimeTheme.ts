@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 
 export type TimeTheme = 'dawn' | 'day' | 'dusk' | 'night';
+export type TimeMode = TimeTheme | 'auto';
 
 export interface ThemeColors {
   gradientStart: string;
@@ -44,15 +45,20 @@ const themeMap: Record<TimeTheme, ThemeColors> = {
   },
 };
 
-export function useTimeTheme() {
-  const [theme, setTheme] = useState<TimeTheme>(getTimeTheme);
+export function useTimeTheme(mode: TimeMode = 'auto') {
+  const [theme, setTheme] = useState<TimeTheme>(() => (mode === 'auto' ? getTimeTheme() : mode));
 
   useEffect(() => {
+    if (mode !== 'auto') {
+      setTheme(mode);
+      return;
+    }
+
     const interval = setInterval(() => {
       setTheme(getTimeTheme());
     }, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [mode]);
 
   return { theme, colors: themeMap[theme] };
 }

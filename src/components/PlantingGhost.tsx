@@ -1,17 +1,22 @@
 import { motion } from 'framer-motion';
+import { getTreeDepthMetrics } from '@/lib/treeDepth';
 
 interface Props {
   imageData: string;
   mouseX: number;
   mouseY: number;
   onPlace: (x: number, y: number) => void;
+  minY: number;
+  maxY: number;
 }
 
-export default function PlantingGhost({ imageData, mouseX, mouseY, onPlace }: Props) {
+export default function PlantingGhost({ imageData, mouseX, mouseY, onPlace, minY, maxY }: Props) {
+  const depth = getTreeDepthMetrics(mouseY, minY, maxY);
+
   return (
     <div
       className="fixed inset-0 z-20 cursor-pointer"
-      onClick={() => onPlace(mouseX, mouseY)}
+      onClick={() => onPlace(mouseX, depth.clampedY)}
       style={{ cursor: 'none' }}
     >
       {/* Hint text */}
@@ -36,10 +41,13 @@ export default function PlantingGhost({ imageData, mouseX, mouseY, onPlace }: Pr
         className="fixed pointer-events-none"
         style={{
           left: mouseX - 40,
-          top: mouseY - 60,
+          top: depth.clampedY - 60,
           width: 80,
           height: 80,
-          filter: 'drop-shadow(0 0 12px rgba(129, 199, 132, 0.5))',
+          objectPosition: 'bottom center',
+          transform: `scale(${depth.perspectiveScale})`,
+          transformOrigin: 'bottom center',
+          filter: `blur(${depth.blurPx.toFixed(2)}px) saturate(${depth.saturation.toFixed(2)}) drop-shadow(${depth.ghostShadowOffsetX.toFixed(1)}px ${depth.ghostShadowOffsetY.toFixed(1)}px ${depth.ghostShadowBlur.toFixed(1)}px rgba(129, 199, 132, ${depth.ghostShadowOpacity.toFixed(2)}))`,
           opacity: 0.7,
         }}
         animate={{

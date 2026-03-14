@@ -136,11 +136,13 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
 
     if (maxX < minX || maxY < minY) return canvas.toDataURL('image/png');
 
-    const pad = 4;
-    minX = Math.max(0, minX - pad);
-    minY = Math.max(0, minY - pad);
-    maxX = Math.min(width - 1, maxX + pad);
-    maxY = Math.min(height - 1, maxY + pad);
+    const padX = 4;
+    const padTop = 4;
+    const padBottom = 0;
+    minX = Math.max(0, minX - padX);
+    minY = Math.max(0, minY - padTop);
+    maxX = Math.min(width - 1, maxX + padX);
+    maxY = Math.min(height - 1, maxY + padBottom);
 
     const cropW = maxX - minX + 1;
     const cropH = maxY - minY + 1;

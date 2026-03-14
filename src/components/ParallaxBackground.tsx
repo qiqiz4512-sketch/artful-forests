@@ -1,13 +1,16 @@
 import { useRef, useEffect, useState } from 'react';
 import { ThemeColors, TimeTheme } from '@/hooks/useTimeTheme';
+import { WorldEcologyAtmosphere } from '@/lib/worldEcology';
 
 interface Props {
   theme: TimeTheme;
   colors: ThemeColors;
   scrollX: number;
+  cameraZoom: number;
+  atmosphere: WorldEcologyAtmosphere;
 }
 
-export default function ParallaxBackground({ colors, scrollX, theme }: Props) {
+export default function ParallaxBackground({ colors, scrollX, theme, cameraZoom, atmosphere }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
 
@@ -31,39 +34,65 @@ export default function ParallaxBackground({ colors, scrollX, theme }: Props) {
     ctx.fillStyle = skyGrad;
     ctx.fillRect(0, 0, size.w, size.h);
 
+    const skyOverlay = ctx.createRadialGradient(size.w * 0.72, size.h * 0.16, 0, size.w * 0.72, size.h * 0.16, size.w * 0.7);
+    skyOverlay.addColorStop(0, atmosphere.glowColor);
+    skyOverlay.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = skyOverlay;
+    ctx.fillRect(0, 0, size.w, size.h);
+
+    ctx.fillStyle = atmosphere.skyOverlay;
+    ctx.fillRect(0, 0, size.w, size.h);
+
     // Far mountains (slowest parallax)
-    drawMountains(ctx, size.w, size.h, scrollX * 0.1, theme);
+    drawMountains(ctx, size.w, size.h, scrollX * 0.1, theme, cameraZoom, atmosphere);
 
     // Mid hills
-    drawHills(ctx, size.w, size.h, scrollX * 0.3, theme);
+    drawHills(ctx, size.w, size.h, scrollX * 0.3, theme, cameraZoom, atmosphere);
 
     // Foreground grass
-    drawGrass(ctx, size.w, size.h, scrollX * 0.5, theme);
-  }, [colors, scrollX, size, theme]);
+    drawGrass(ctx, size.w, size.h, scrollX * 0.5, theme, atmosphere);
+  }, [atmosphere, cameraZoom, colors, scrollX, size, theme]);
 
   return (
     <canvas
       ref={canvasRef}
-      className="fixed inset-0 w-full h-full"
-      style={{ zIndex: 0 }}
+      className="absolute pointer-events-none"
+      style={{
+        left: 0,
+        top: 0,
+        width: size.w,
+        height: size.h,
+        zIndex: 0,
+      }}
     />
   );
 }
 
-function drawMountains(ctx: CanvasRenderingContext2D, w: number, h: number, offset: number, theme: TimeTheme) {
+function drawMountains(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  offset: number,
+  theme: TimeTheme,
+  cameraZoom: number,
+  atmosphere: WorldEcologyAtmosphere,
+) {
   const baseY = h * 0.45;
+  const extraLayers = Math.min(2, Math.max(0, Math.floor((cameraZoom - 1) / 0.12)));
+  const layerCount = 2 + extraLayers;
   const mountainColors = theme === 'night'
     ? ['rgba(26, 35, 126, 0.5)', 'rgba(40, 53, 147, 0.4)']
     : theme === 'dusk'
       ? ['rgba(188, 143, 143, 0.4)', 'rgba(200, 160, 140, 0.3)']
       : ['rgba(144, 202, 180, 0.35)', 'rgba(165, 214, 195, 0.25)'];
 
-  for (let layer = 0; layer < 2; layer++) {
+  for (let layer = 0; layer < layerCount; layer++) {
     ctx.beginPath();
     ctx.moveTo(0, h);
     const layerOffset = offset * (1 + layer * 0.3);
+    const layerHeightShift = Math.max(0, layer - 1) * 26;
     for (let x = 0; x <= w; x += 3) {
-      const y = baseY + layer * 40
+      const y = baseY + layer * 40 - layerHeightShift
         + Math.sin((x + layerOffset) * 0.003 + layer) * 60
         + Math.sin((x + layerOffset) * 0.007 + layer * 2) * 30
         + Math.sin((x + layerOffset) * 0.001) * 80;
@@ -71,12 +100,28 @@ function drawMountains(ctx: CanvasRenderingContext2D, w: number, h: number, offs
     }
     ctx.lineTo(w, h);
     ctx.closePath();
-    ctx.fillStyle = mountainColors[layer];
+    const baseColor = mountainColors[Math.min(layer, mountainColors.length - 1)];
+    const opacityBoost = layer > 1 ? 0.04 * (layer - 1) : 0;
+    ctx.fillStyle = baseColor.replace(/0\.(\d+)\)/, (_m, d) => {
+      const current = Number(`0.${d}`);
+      return `${Math.min(0.65, current + opacityBoost).toFixed(2)})`;
+    });
+    ctx.fill();
+
+    ctx.fillStyle = atmosphere.mountainTint;
     ctx.fill();
   }
 }
 
-function drawHills(ctx: CanvasRenderingContext2D, w: number, h: number, offset: number, theme: TimeTheme) {
+function drawHills(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  offset: number,
+  theme: TimeTheme,
+  cameraZoom: number,
+  atmosphere: WorldEcologyAtmosphere,
+) {
   const baseY = h * 0.65;
   const color = theme === 'night'
     ? 'rgba(27, 38, 100, 0.6)'
@@ -96,10 +141,13 @@ function drawHills(ctx: CanvasRenderingContext2D, w: number, h: number, offset: 
   ctx.closePath();
   ctx.fillStyle = color;
   ctx.fill();
+  ctx.fillStyle = atmosphere.hillTint;
+  ctx.fill();
 
   // Grass tufts
   const grassColor = theme === 'night' ? 'rgba(30, 45, 100, 0.7)' : 'rgba(100, 170, 110, 0.5)';
-  for (let i = 0; i < 30; i++) {
+  const tuftCount = Math.min(180, 30 + Math.round((cameraZoom - 1) * 26));
+  for (let i = 0; i < tuftCount; i++) {
     const gx = ((i * 137 + offset * 0.5) % (w + 200)) - 100;
     const gy = baseY + Math.sin((gx + offset) * 0.005) * 40 + Math.sin((gx + offset) * 0.012) * 20 - 5;
     drawGrassTuft(ctx, gx, gy, grassColor);
@@ -118,7 +166,14 @@ function drawGrassTuft(ctx: CanvasRenderingContext2D, x: number, y: number, colo
   }
 }
 
-function drawGrass(ctx: CanvasRenderingContext2D, w: number, h: number, offset: number, theme: TimeTheme) {
+function drawGrass(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  offset: number,
+  theme: TimeTheme,
+  atmosphere: WorldEcologyAtmosphere,
+) {
   const baseY = h * 0.78;
   const grassGrad = ctx.createLinearGradient(0, baseY, 0, h);
 
@@ -144,5 +199,8 @@ function drawGrass(ctx: CanvasRenderingContext2D, w: number, h: number, offset: 
   ctx.lineTo(w, h);
   ctx.closePath();
   ctx.fillStyle = grassGrad;
+  ctx.fill();
+
+  ctx.fillStyle = atmosphere.grassTint;
   ctx.fill();
 }
