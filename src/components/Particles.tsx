@@ -27,6 +27,8 @@ export default function Particles({ colors, weather, emissionRateMultiplier = 1,
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const particlesRef = useRef<Particle[]>([]);
   const animRef = useRef<number>(0);
+  const emissionMulRef = useRef(emissionRateMultiplier);
+  emissionMulRef.current = emissionRateMultiplier;
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -34,10 +36,15 @@ export default function Particles({ colors, weather, emissionRateMultiplier = 1,
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
-    const count = getParticleCount(colors.particleType, weather, emissionRateMultiplier);
+    const count = getParticleCount(colors.particleType, weather, emissionMulRef.current);
     particlesRef.current = Array.from({ length: count }, () =>
       createParticle(canvas.width, canvas.height, colors.particleType, weather, atmosphere)
     );
+    if (weather === 'snow') {
+      particlesRef.current.forEach((p) => {
+        p.y = Math.random() * canvas.height;
+      });
+    }
 
     const onResize = () => {
       canvas.width = window.innerWidth;
@@ -103,17 +110,44 @@ export default function Particles({ colors, weather, emissionRateMultiplier = 1,
         // Snow
         if (weather === 'snow') {
           // Gentle horizontal drift
-          p.x += Math.sin(p.phase * 0.5) * 0.3;
-          ctx.globalAlpha = p.opacity * 0.85;
+          p.x += Math.sin(p.phase * 0.3) * 0.18;
+          ctx.globalAlpha = p.opacity * 0.9;
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.phase);
+          ctx.strokeStyle = 'rgba(220, 235, 255, 0.95)';
+          ctx.lineWidth = p.size * 0.18;
+          ctx.shadowColor = 'rgba(180, 210, 255, 0.5)';
+          ctx.shadowBlur = p.size * 1.5;
+          const r = p.size;
+          // 6 main arms
+          for (let i = 0; i < 6; i++) {
+            const angle = (Math.PI / 3) * i;
+            const ax = Math.cos(angle) * r;
+            const ay = Math.sin(angle) * r;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(ax, ay);
+            ctx.stroke();
+            // two side branches per arm
+            const bLen = r * 0.42;
+            const bAngle = Math.PI / 5;
+            for (const sign of [-1, 1]) {
+              const bx = Math.cos(angle + sign * bAngle) * bLen;
+              const by = Math.sin(angle + sign * bAngle) * bLen;
+              ctx.beginPath();
+              ctx.moveTo(ax * 0.5, ay * 0.5);
+              ctx.lineTo(ax * 0.5 + bx, ay * 0.5 + by);
+              ctx.stroke();
+            }
+          }
+          // center dot
           ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-          // Soft white with slight blue tint
-          const brightness = 240 + Math.floor(Math.random() * 15);
-          ctx.fillStyle = `rgba(${brightness}, ${brightness}, 255, 0.9)`;
-          ctx.shadowColor = 'rgba(200, 210, 240, 0.4)';
-          ctx.shadowBlur = p.size * 2;
+          ctx.arc(0, 0, p.size * 0.15, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(220, 235, 255, 0.95)';
           ctx.fill();
           ctx.shadowBlur = 0;
+          ctx.restore();
           ctx.globalAlpha = 1;
           return;
         }
@@ -131,6 +165,16 @@ export default function Particles({ colors, weather, emissionRateMultiplier = 1,
         ctx.globalAlpha = 1;
       });
 
+      // Dynamically adjust particle count without restarting animation
+      const targetCount = getParticleCount(colors.particleType, weather, emissionMulRef.current);
+      if (particlesRef.current.length < targetCount) {
+        particlesRef.current.push(
+          createParticle(canvas.width, canvas.height, colors.particleType, weather, atmosphere)
+        );
+      } else if (particlesRef.current.length > targetCount + 5) {
+        particlesRef.current.pop();
+      }
+
       animRef.current = requestAnimationFrame(animate);
     }
 
@@ -139,7 +183,7 @@ export default function Particles({ colors, weather, emissionRateMultiplier = 1,
       cancelAnimationFrame(animRef.current);
       window.removeEventListener('resize', onResize);
     };
-  }, [atmosphere, colors, emissionRateMultiplier, weather]);
+  }, [atmosphere, colors, weather]);
 
   return (
     <canvas
@@ -157,7 +201,7 @@ export default function Particles({ colors, weather, emissionRateMultiplier = 1,
 }
 
 function getParticleCount(type: string, weather: WeatherType, emissionRateMultiplier: number): number {
-  const base = weather === 'rain' ? 120 : weather === 'snow' ? 60 : type === 'firefly' ? 25 : 20;
+  const base = weather === 'rain' ? 120 : weather === 'snow' ? 80 : type === 'firefly' ? 25 : 20;
   return Math.max(8, Math.round(base * Math.max(0.5, emissionRateMultiplier)));
 }
 
@@ -185,10 +229,10 @@ function createParticle(
   if (weather === 'snow') {
     return {
       x: Math.random() * w,
-      y: -10 - Math.random() * 100,
-      size: 1.5 + Math.random() * 3.5,
-      speedX: (Math.random() - 0.5) * 0.6,
-      speedY: 0.4 + Math.random() * 1.2,
+      y: -10 - Math.random() * 80,
+      size: 2.2 + Math.random() * 4.2,
+      speedX: (Math.random() - 0.5) * 0.4,
+        speedY: 0.6 + Math.random() * 0.2,
       opacity: 0.5 + Math.random() * 0.5,
       phase: Math.random() * Math.PI * 2,
       hue: 0,

@@ -1,7 +1,7 @@
-import { TreePersonality } from '@/types/forest';
+import { SpeakingPace, TreePersonality } from '@/types/forest';
 import { getWorldEcologyHabitatLine, getWorldEcologyZone } from '@/lib/worldEcology';
 
-const PERSONALITIES: TreePersonality[] = ['温柔', '睿智', '顽皮', '社恐'];
+const NON_SHY_PERSONALITIES: TreePersonality[] = ['温柔', '睿智', '顽皮'];
 
 const NAME_PREFIXES = ['青', '雾', '岚', '溪', '松', '杉', '芽', '木', '风', '云', '星', '露'];
 const NAME_SUFFIXES = ['语', '眠', '灯', '歌', '影', '桥', '叶', '石', '舟', '丘', '枝', '心'];
@@ -37,6 +37,9 @@ const LAST_WORDS_LIBRARY: Record<TreePersonality, string[]> = {
   神启: ['愿你在每一阵风里都更接近自己。', '我会看着你长成远方。'],
 };
 
+const CHATTERBOX_CHANCE = 0.4;
+const NORMAL_TALKER_CHANCE = 0.45;
+
 const randomFrom = <T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)];
 
 export interface TreeProfile {
@@ -45,6 +48,8 @@ export interface TreeProfile {
   metadata: {
     bio: string;
     lastWords: string;
+    chatterbox?: boolean;
+    speakingPace?: SpeakingPace;
   };
 }
 
@@ -54,21 +59,33 @@ interface GenerateRandomProfileOptions {
 }
 
 export function generateRandomProfile(options: GenerateRandomProfileOptions = {}): TreeProfile {
-  const personality = randomFrom(PERSONALITIES);
+  const paceRoll = Math.random();
+  const speakingPace: SpeakingPace =
+    paceRoll < CHATTERBOX_CHANCE
+      ? 'chatterbox'
+      : paceRoll < CHATTERBOX_CHANCE + NORMAL_TALKER_CHANCE
+        ? 'normal'
+        : 'shy';
+  const personality = speakingPace === 'shy' ? '社恐' : randomFrom(NON_SHY_PERSONALITIES);
   const name = `${randomFrom(NAME_PREFIXES)}${randomFrom(NAME_SUFFIXES)}${Math.floor(10 + Math.random() * 90)}`;
+  const chatterbox = speakingPace === 'chatterbox';
   const hasWorldContext = typeof options.x === 'number' && typeof options.worldWidth === 'number';
   const ecologyPrefix = hasWorldContext
     ? `${getWorldEcologyZone(options.x!, options.worldWidth!).label}的树。`
     : '';
   const habitatLine = hasWorldContext ? getWorldEcologyHabitatLine(options.x!, options.worldWidth!) : '';
   const baseBio = randomFrom(BIO_LIBRARY[personality]);
+  const chatterboxLine = chatterbox ? '这棵树有点话痨，见到邻居就想聊两句。' : '';
+  const shyLine = speakingPace === 'shy' ? '天生偏社恐，通常很久才会开口一次。' : '';
 
   return {
     name,
     personality,
     metadata: {
-      bio: [ecologyPrefix, habitatLine, baseBio].filter(Boolean).join(' '),
+      bio: [ecologyPrefix, habitatLine, chatterboxLine, shyLine, baseBio].filter(Boolean).join(' '),
       lastWords: randomFrom(LAST_WORDS_LIBRARY[personality]),
+      chatterbox,
+      speakingPace,
     },
   };
 }

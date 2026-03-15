@@ -49,6 +49,8 @@ export interface TreeAgent {
   metadata: {
     bio: string;
     lastWords: string;
+    chatterbox?: boolean;
+    speakingPace?: SpeakingPace;
   };
   shape?: {
     id: string;
@@ -76,6 +78,8 @@ export interface AddTreeInput {
   metadata: {
     bio: string;
     lastWords: string;
+    chatterbox?: boolean;
+    speakingPace?: SpeakingPace;
   };
   energy?: number;
   generation?: number;
@@ -108,6 +112,7 @@ export interface ChatHistoryEntry {
 
 export type SocialWeather = 'sunny' | 'rain' | 'snow' | 'night';
 export type NarrativeMode = 'normal' | 'dramatic';
+export type SpeakingPace = 'chatterbox' | 'normal' | 'shy';
 
 export interface GlobalSocialEffects {
   silenceUntil: number;

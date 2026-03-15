@@ -146,7 +146,7 @@ export default function AgentLink({ agents, offsetX = 0 }: Props) {
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         className="absolute inset-0 pointer-events-none"
-        style={{ zIndex: 28 }}
+        style={{ zIndex: 12000 }}
       >
         <svg className="absolute inset-0 w-full h-full" aria-hidden>
           <defs>

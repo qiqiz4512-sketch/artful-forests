@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { genVirtualInteractions, PERSONA_MATRIX, PersonaKey } from '@/constants/personaMatrix';
-import { NarrativeMode, SocialState } from '@/types/forest';
+import { NarrativeMode, SocialState, SpeakingPace } from '@/types/forest';
 import { useForestStore } from '@/stores/useForestStore';
 import { getWorldEcologySocialMood, getWorldEcologyZone, inferWorldWidthFromPositions } from '@/lib/worldEcology';
 import { areBloodRelated, generateSocialChat, getRelationType, isAdult, isDivineTree, resolveMemoryCue } from '@/lib/treeSociety';
@@ -12,10 +12,26 @@ const lastConvByPair = new Map<string, { message: string; time: number }>();
 
 // Last-active timestamp per tree for 捞人 mechanic
 const lastActiveByTree = new Map<string, number>();
+const nextSpeakerReadyAtByTree = new Map<string, number>();
 
 const SILENCE_RESCUE_MS = 3 * 60 * 1000; // 3 minutes idle triggers possible rescue
 const DIVINE_SURGE_CHAT_MULTIPLIER = 1.9;
 const DIVINE_SURGE_ADORATION_RANGE = 560;
+const CHATTERBOX_STARTER_BOOST = 1.95;
+// Default to carnival mode: faster chat cadence and quicker turn-taking.
+const A2A_BASE_DELAY_MS = 2200;
+const A2A_DELAY_JITTER_MS = 4200;
+const A2A_TALKING_DURATION_MS = 2800;
+const A2A_TALKING_DURATION_DIVINE_MS = 1900;
+const PERSONALITY_TALK_RATE: Record<string, number> = {
+  活泼: 1.38,
+  顽皮: 1.22,
+  调皮: 1.22,
+  温柔: 0.95,
+  睿智: 1,
+  社恐: 0.38,
+  神启: 1.15,
+};
 
 const CROSS_ZONE_BRIDGES = [
   '你带来的气息，和这边的风混在一起了。',
@@ -119,6 +135,39 @@ const randomWeighted = <T,>(items: T[], getWeight: (item: T) => number): T => {
   return weighted[weighted.length - 1].item;
 };
 
+const getStarterWeight = (
+  agent: { position: { x: number }; personality?: string; metadata?: { chatterbox?: boolean; speakingPace?: SpeakingPace } },
+  worldWidth: number,
+) => {
+  const baseWeight = getWorldEcologySocialMood(agent.position.x, worldWidth).conversationWeight;
+  const chatterboxBoost = agent.metadata?.chatterbox ? CHATTERBOX_STARTER_BOOST : 1;
+  const personalityRate = PERSONALITY_TALK_RATE[agent.personality ?? ''] ?? 1;
+  return baseWeight * chatterboxBoost * personalityRate;
+};
+
+const resolveSpeakingPace = (agent: { personality?: string; metadata?: { chatterbox?: boolean; speakingPace?: SpeakingPace } }): SpeakingPace => {
+  if (agent.metadata?.speakingPace) return agent.metadata.speakingPace;
+  if (agent.metadata?.chatterbox) return 'chatterbox';
+  if (agent.personality === '社恐') return 'shy';
+  return 'normal';
+};
+
+const pickSpeakerCooldownMs = (agent: { personality?: string; metadata?: { chatterbox?: boolean; speakingPace?: SpeakingPace } }) => {
+  const pace = resolveSpeakingPace(agent);
+  if (pace === 'chatterbox') return 2000 + Math.random() * 1000;
+  if (pace === 'normal') return 10000 + Math.random() * 5000;
+  return 22000 + Math.random() * 18000;
+};
+
+const isSpeakerReady = (agent: { id: string }, now: number) => now >= (nextSpeakerReadyAtByTree.get(agent.id) ?? 0);
+
+const markSpeakerSpoken = (
+  agent: { id: string; personality?: string; metadata?: { chatterbox?: boolean; speakingPace?: SpeakingPace } },
+  now: number,
+) => {
+  nextSpeakerReadyAtByTree.set(agent.id, now + pickSpeakerCooldownMs(agent));
+};
+
 export function useAgentA2A() {
   useEffect(() => {
     let mainTimer: number | null = null;
@@ -135,7 +184,7 @@ export function useAgentA2A() {
           : 1;
       const divineSurgeActive = Date.now() < state.globalEffects.divineSurgeUntil;
       const interactionBoost = divineSurgeActive ? DIVINE_SURGE_CHAT_MULTIPLIER : 1;
-      const delay = (5000 + Math.random() * 10000) / (averageWeight * interactionBoost);
+      const delay = (A2A_BASE_DELAY_MS + Math.random() * A2A_DELAY_JITTER_MS) / (averageWeight * interactionBoost);
       mainTimer = window.setTimeout(runConversation, delay);
     };
 
@@ -145,6 +194,8 @@ export function useAgentA2A() {
         schedule();
         return;
       }
+
+      const now = Date.now();
 
       const agents = store.agents;
       const worldWidth = inferWorldWidthFromPositions(agents.map((agent) => agent.position.x));
@@ -158,7 +209,7 @@ export function useAgentA2A() {
       const canRescue = Math.random() < (divineSurgeActive ? 0.34 : 0.2);
       if (canRescue && agents.length >= 2) {
         const rescuers = agents.filter(
-          (a) => (a.personality === '活泼' || a.personality === '调皮') && a.socialState === SocialState.IDLE,
+          (a) => (a.personality === '活泼' || a.personality === '调皮') && a.socialState === SocialState.IDLE && isSpeakerReady(a, now),
         );
         const silentCandidates = agents.filter((a) => {
           if (a.socialState !== SocialState.IDLE) return false;
@@ -184,6 +235,7 @@ export function useAgentA2A() {
               isTrending: false,
             });
             lastActiveByTree.set(rescuer.id, Date.now());
+            markSpeakerSpoken(rescuer, now);
             schedule();
             return;
           }
@@ -196,6 +248,7 @@ export function useAgentA2A() {
         const adorationCandidates = agents.filter((agent) => {
           if (agent.id === manualTree.id || agent.isManual) return false;
           if (agent.socialState !== SocialState.IDLE) return false;
+          if (!isSpeakerReady(agent, now)) return false;
           const distance = Math.hypot(agent.position.x - manualTree.position.x, agent.position.y - manualTree.position.y);
           return distance <= adorationRange;
         });
@@ -203,7 +256,7 @@ export function useAgentA2A() {
         if (adorationCandidates.length > 0) {
           agentA = randomWeighted(
             adorationCandidates,
-            (agent) => getWorldEcologySocialMood(agent.position.x, worldWidth).conversationWeight,
+            (agent) => getStarterWeight(agent, worldWidth),
           );
           agentB = manualTree;
         }
@@ -211,7 +264,7 @@ export function useAgentA2A() {
 
       if (!agentA || !agentB) {
         const starters = agents.filter(
-          (agent) => agent.socialState === SocialState.IDLE && agent.neighbors.length > 0,
+          (agent) => agent.socialState === SocialState.IDLE && agent.neighbors.length > 0 && isSpeakerReady(agent, now),
         );
 
         if (starters.length === 0) {
@@ -221,7 +274,7 @@ export function useAgentA2A() {
 
         agentA = randomWeighted(
           starters,
-          (agent) => getWorldEcologySocialMood(agent.position.x, worldWidth).conversationWeight,
+          (agent) => getStarterWeight(agent, worldWidth),
         );
         const possibleReceivers = agentA.neighbors
           .map((id) => idToAgent.get(id))
@@ -306,11 +359,15 @@ export function useAgentA2A() {
           : Math.random() < (narrativeMode === 'dramatic' ? 0.86 : 0.7)
             ? randomIn(getWorldEcologySocialMood(agentA.position.x, worldWidth).phraseTail)
             : null;
+      const shySpeaker = nextA.personality === '社恐';
+      const composedMessage = shySpeaker
+        ? [stitchedMessage, Math.random() < 0.24 ? storyBeat : null].filter(Boolean).join(' ')
+        : [stitchedMessage, relationArcBeat, storyBeat, zoneTail].filter(Boolean).join(' ');
       const message = canConfess
         ? `家人们他问我愿不愿意！！！${stitchedMessage} 😭✨`
         : divinePair
           ? stitchedMessage
-          : [stitchedMessage, relationArcBeat, storyBeat, zoneTail].filter(Boolean).join(' ');
+          : composedMessage;
 
       // Update echo relay record
       lastConvByPair.set(pairKey, { message, time: Date.now() });
@@ -318,6 +375,7 @@ export function useAgentA2A() {
       // Update last-active timestamps
       lastActiveByTree.set(nextA.id, Date.now());
       lastActiveByTree.set(nextB.id, Date.now());
+      markSpeakerSpoken(nextA, Date.now());
 
       // Trending: manual tree conversations get the trending badge
       const isTrending = nextA.isManual || nextB.isManual;
@@ -355,7 +413,7 @@ export function useAgentA2A() {
         isTrending,
       });
 
-      const talkingDuration = divineSurgeActive ? 3200 : 5000;
+      const talkingDuration = divineSurgeActive ? A2A_TALKING_DURATION_DIVINE_MS : A2A_TALKING_DURATION_MS;
       resetTimer = window.setTimeout(() => {
         const current = useForestStore.getState();
         current.setSocialStateFor([agentA.id, agentB.id], SocialState.IDLE);

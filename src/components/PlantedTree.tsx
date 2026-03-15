@@ -3,8 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { getTreeDepthMetrics } from '@/lib/treeDepth';
 import { TreeAgent } from '@/types/forest';
 import TreeIdentity from '@/components/TreeIdentity';
-import { getTreeSpeciesPhrases } from '@/lib/treeSpecies';
 import { useForestStore } from '@/stores/useForestStore';
+
+const randomIn = <T,>(arr: readonly T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
 interface Props {
   imageData: string;
@@ -176,14 +177,47 @@ const getGrowthSpring = (shapeId?: string) => {
 };
 
 const ADORATION_DETECTION_RANGE = 300;
+const USER_NUDGE_BUBBLE_MS = 3200;
+const USER_NUDGE_FOLLOWUP_CHANCE = 0.38;
+const USER_NUDGE_FOLLOWUP_DELAY_MS = 900;
+const USER_NUDGE_LINES_COMMON = [
+  '有事吗？',
+  '找我干嘛？',
+  '先说重点，我叶子要掉了。',
+  '你先夸我两句我再听。',
+  '又来催更树生故事了？',
+  '我在营业，你在偷看。',
+];
+const USER_NUDGE_LINES_BY_PERSONALITY: Record<string, string[]> = {
+  社恐: ['可、可以打字吗…', '我先紧张一下再回答你。'],
+  活泼: ['你点我我就当你在打 call！', '来都来了，聊两句呀！'],
+  顽皮: ['点我一下，今天好运+1。', '你是不是偷偷最喜欢我？'],
+  睿智: ['问题很好，先深呼吸。', '答案在风里，你再问一次。'],
+  温柔: ['慢慢说，我在听。', '别急，我会认真回你。'],
+  神启: ['凡人，你成功召唤了我。', '请讲，我已开启神谕频道。'],
+};
+const USER_NUDGE_FOLLOWUP_LINES = [
+  '所以呢？',
+  '然后？继续说。',
+  '重点呢？我在等。',
+  '这就是全部情报？',
+  '行，我姑且听着。',
+];
+
+const pickUserNudgeLine = (personality?: string, isManual?: boolean) => {
+  if (isManual) return randomIn(USER_NUDGE_LINES_BY_PERSONALITY['神启']);
+  const specific = personality ? USER_NUDGE_LINES_BY_PERSONALITY[personality] ?? [] : [];
+  return randomIn([...specific, ...USER_NUDGE_LINES_COMMON]);
+};
 
 export default function PlantedTree({ imageData, x, y, size, isNew, growthMode = 'ambient', minY, maxY, agentId, profile, highlighted = false }: Props) {
-  const [showPhrase, setShowPhrase] = useState(false);
-  const [phrase, setPhrase] = useState('');
   const [isHovered, setIsHovered] = useState(false);
   const [hasGrown, setHasGrown] = useState(false);
+  const [userNudgeLines, setUserNudgeLines] = useState<string[]>([]);
   const treeRef = useRef<HTMLDivElement | null>(null);
   const growDelayRef = useRef(Math.random() * 0.5);
+  const userNudgeTimerRef = useRef<number | null>(null);
+  const userNudgeFollowupTimerRef = useRef<number | null>(null);
 
   const groundY = y + size;
   const depth = getTreeDepthMetrics(groundY, minY, maxY);
@@ -193,6 +227,7 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
   const entryInitialOpacity = isAutoGrowth ? 0.16 : 0;
   const growthSpring = getGrowthSpring(profile?.shape?.id);
   const agents = useForestStore((state) => state.agents);
+  const activeChat = useForestStore((state) => state.activeChat);
   const partnerId = profile?.socialCircle?.partner;
   const partner = agents.find((agent) => agent.id === partnerId);
   const partnerIntimacy = partnerId ? profile?.intimacyMap?.[partnerId] ?? 0 : 0;
@@ -212,6 +247,37 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
       ? Math.sign(partner.position.x - (profile?.position.x ?? x + size * 0.5)) * Math.min(4.5, 1.2 + (partnerIntimacy - 90) * 0.18)
       : 0;
   const hasSyncAffinity = Boolean(partner && towardPartnerX !== 0);
+  const effectiveHovered = isHovered;
+  const isSpeaker = Boolean(agentId && activeChat?.treeAId === agentId);
+  const isListener = Boolean(agentId && activeChat?.treeBId === agentId);
+  const DIALOGUE_LINE_CHARS = 6;
+  const dialogueSnippet = isSpeaker && activeChat
+    ? (() => {
+        const msg = activeChat.message;
+        const m = msg.match(/^([^\u3002\uff01\uff1f]{2,16}[\u3002\uff01\uff1f]?)/);
+        return m ? m[1] : (msg.length > 16 ? msg.slice(0, 16) + '\u2026' : msg);
+      })()
+    : '';
+  const dialogueBubbleText = dialogueSnippet
+    ? (() => {
+        const chunks = dialogueSnippet.match(new RegExp(`.{1,${DIALOGUE_LINE_CHARS}}`, 'g')) ?? [dialogueSnippet];
+        return chunks
+          .map((chunk) => chunk.padEnd(DIALOGUE_LINE_CHARS, '\u3000'))
+          .join('\n');
+      })()
+    : '';
+  const userNudgeBubbleText = userNudgeLines.length > 0
+    ? userNudgeLines
+      .map((line) => {
+        const snippet = line.length > 16 ? line.slice(0, 16) + '\u2026' : line;
+        const chunks = snippet.match(new RegExp(`.{1,${DIALOGUE_LINE_CHARS}}`, 'g')) ?? [snippet];
+        return chunks
+          .map((chunk) => chunk.padEnd(DIALOGUE_LINE_CHARS, '\u3000'))
+          .join('\n');
+      })
+      .join('\n')
+    : '';
+  const hasActiveBubble = userNudgeLines.length > 0 || isSpeaker || isListener;
 
   const idleAnim = getIdleAnim(profile?.personality, profile?.shape?.id);
 
@@ -241,18 +307,49 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
     return () => observer.disconnect();
   }, [hasGrown, isNew]);
 
-  const handleClick = () => {
-    const speciesPhrases = getTreeSpeciesPhrases(profile?.shape?.id);
-    const p = speciesPhrases[Math.floor(Math.random() * speciesPhrases.length)];
-    setPhrase(p);
-    setShowPhrase(true);
-    setTimeout(() => setShowPhrase(false), 3000);
+  useEffect(() => () => {
+    if (userNudgeTimerRef.current !== null) {
+      window.clearTimeout(userNudgeTimerRef.current);
+      userNudgeTimerRef.current = null;
+    }
+    if (userNudgeFollowupTimerRef.current !== null) {
+      window.clearTimeout(userNudgeFollowupTimerRef.current);
+      userNudgeFollowupTimerRef.current = null;
+    }
+  }, []);
+
+  const handleUserNudge = () => {
+    if (userNudgeTimerRef.current !== null) {
+      window.clearTimeout(userNudgeTimerRef.current);
+    }
+    if (userNudgeFollowupTimerRef.current !== null) {
+      window.clearTimeout(userNudgeFollowupTimerRef.current);
+    }
+    const nextText = pickUserNudgeLine(profile?.personality, profile?.isManual);
+    setUserNudgeLines([nextText]);
+
+    if (Math.random() < USER_NUDGE_FOLLOWUP_CHANCE) {
+      userNudgeFollowupTimerRef.current = window.setTimeout(() => {
+        setUserNudgeLines((prev) => {
+          const followup = randomIn(USER_NUDGE_FOLLOWUP_LINES);
+          if (prev.length === 0) return [followup];
+          if (prev.length >= 2) return prev;
+          return [...prev, followup];
+        });
+        userNudgeFollowupTimerRef.current = null;
+      }, USER_NUDGE_FOLLOWUP_DELAY_MS);
+    }
+
+    userNudgeTimerRef.current = window.setTimeout(() => {
+      setUserNudgeLines([]);
+      userNudgeTimerRef.current = null;
+    }, USER_NUDGE_BUBBLE_MS);
   };
 
   return (
     <div
       ref={treeRef}
-      className="absolute cursor-pointer"
+      className="absolute"
       style={{
         left: x,
         top: y,
@@ -260,7 +357,7 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
         height: size,
         transform: `scale(${depth.perspectiveScale})`,
         transformOrigin: 'bottom center',
-        zIndex: depth.zIndex,
+        zIndex: hasActiveBubble ? 9000 : depth.zIndex,
       }}
     >
       <motion.div
@@ -271,7 +368,7 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
           y: shouldGrowIn ? 0 : 20,
           scale: shouldGrowIn ? 1 : entryInitialScale,
           opacity: shouldGrowIn ? 1 : entryInitialOpacity,
-          rotate: isHovered
+          rotate: effectiveHovered
             ? [0, depth.swayAmplitude, -depth.swayAmplitude, depth.swayAmplitude * 0.45, -depth.swayAmplitude * 0.45, 0]
             : 0,
         }}
@@ -294,19 +391,19 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
                   damping: growthSpring.damping,
                   delay: growDelayRef.current + growthSpring.yDelay,
                 },
-                rotate: { duration: depth.swayDuration * animationDurationScale, repeat: isHovered ? Infinity : 0 },
+                rotate: { duration: depth.swayDuration * animationDurationScale, repeat: effectiveHovered ? Infinity : 0 },
               }
-            : { rotate: { duration: depth.swayDuration * animationDurationScale, repeat: isHovered ? Infinity : 0 } }
+            : { rotate: { duration: depth.swayDuration * animationDurationScale, repeat: effectiveHovered ? Infinity : 0 } }
         }
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
-        onClick={handleClick}
+        onClick={handleUserNudge}
       >
         <motion.div
           className="relative w-full h-full"
           style={{ transformOrigin: 'bottom center' }}
-            animate={!isHovered && !isAdoring && hasSyncAffinity ? { x: [0, towardPartnerX, 0] } : { x: 0 }}
-            transition={!isHovered && !isAdoring && hasSyncAffinity
+            animate={!effectiveHovered && !isAdoring && hasSyncAffinity ? { x: [0, towardPartnerX, 0] } : { x: 0 }}
+            transition={!effectiveHovered && !isAdoring && hasSyncAffinity
             ? {
                 x: {
                     duration: 2.2 * animationDurationScale,
@@ -319,15 +416,15 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
           <motion.div
             className="relative w-full h-full"
             style={{ transformOrigin: 'bottom center' }}
-            animate={!isHovered && !isAdoring && idleAnim ? idleAnim.animate : {}}
-            transition={!isHovered && !isAdoring && idleAnim
+            animate={!effectiveHovered && !isAdoring && idleAnim ? idleAnim.animate : {}}
+            transition={!effectiveHovered && !isAdoring && idleAnim
               ? {
                   ...idleAnim.transition,
                   duration: idleAnim.transition.duration * animationDurationScale,
                 }
               : { duration: 0.3 }}
           >
-          {isAdoring && !isHovered ? (
+          {isAdoring && !effectiveHovered ? (
             <>
               <img
                 src={imageData}
@@ -432,29 +529,167 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
           personality={profile?.personality}
           shapeId={profile?.shape?.id}
           scale={depth.perspectiveScale}
-          hovered={isHovered}
+          hovered={effectiveHovered}
         />
 
+        {/* 点击树木互动气泡 — 右上方（优先显示） */}
         <AnimatePresence>
-          {showPhrase && (
+          {userNudgeLines.length > 0 && (
             <motion.div
-              initial={{ opacity: 0, y: 10, scale: 0.8 }}
-              animate={{ opacity: 1, y: -10, scale: 1 }}
-              exit={{ opacity: 0, y: -20, scale: 0.8 }}
-              className="absolute left-1/2 whitespace-nowrap font-handwriting text-lg pointer-events-none"
+              key={'user-nudge-' + agentId}
+              initial={{ opacity: 0, x: 8, y: 4, scale: 0.9 }}
+              animate={{ opacity: 1, x: 0, y: [0, -1, 0], scale: [1, 1.03, 1] }}
+              exit={{ opacity: 0, x: 5, y: 2, scale: 0.92 }}
+              transition={{
+                opacity: { duration: 0.16, ease: 'easeOut' },
+                x: { type: 'spring', stiffness: 280, damping: 24 },
+                y: { duration: 1.9, repeat: Infinity, ease: 'easeInOut' },
+                scale: { duration: 0.24, ease: 'easeOut' },
+              }}
+              className="absolute pointer-events-none"
               style={{
-                top: depth.phraseTop,
-                transform: `translateX(-50%) scale(${depth.phraseCompensationScale.toFixed(2)})`,
-                background: 'rgba(255,252,245,0.9)',
-                padding: '6px 14px',
-                borderRadius: '8px 12px 10px 14px',
-                boxShadow: `2px 3px 10px rgba(0,0,0,${depth.phraseShadowOpacity.toFixed(2)})`,
-                color: 'hsl(152, 30%, 25%)',
-                border: '1px solid rgba(180,170,150,0.2)',
-                zIndex: 2,
+                top: '-4%',
+                left: '102%',
+                transform: `scale(${depth.phraseCompensationScale.toFixed(2)})`,
+                transformOrigin: 'left bottom',
+                zIndex: 26,
               }}
             >
-              {phrase}
+              <div
+                style={{
+                  minWidth: 102,
+                  maxWidth: 148,
+                  width: `${DIALOGUE_LINE_CHARS}em`,
+                  fontFamily: "'ZCOOL KuaiLe', cursive",
+                  fontSize: 12,
+                  lineHeight: 1.52,
+                  letterSpacing: '0.03em',
+                  background: 'linear-gradient(160deg, rgba(255, 248, 246, 0.98) 0%, rgba(255, 241, 245, 0.95) 100%)',
+                  padding: '6px 11px',
+                  borderRadius: '16px 16px 16px 8px',
+                  boxShadow: '0 6px 16px rgba(120, 92, 108, 0.16), 0 1px 0 rgba(255,255,255,0.5) inset',
+                  color: 'hsl(152, 30%, 24%)',
+                  border: '1px solid rgba(214, 170, 188, 0.42)',
+                  whiteSpace: 'pre',
+                  position: 'relative',
+                }}
+              >
+                {userNudgeBubbleText}
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: -5,
+                    top: '72%',
+                    transform: 'translateY(-50%) rotate(45deg)',
+                    width: 10,
+                    height: 10,
+                    background: 'rgba(255, 241, 245, 0.96)',
+                    borderLeft: '1px solid rgba(214, 170, 188, 0.42)',
+                    borderBottom: '1px solid rgba(214, 170, 188, 0.42)',
+                  }}
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* A2A 对话气泡 — 说话方（右上方） */}
+        <AnimatePresence>
+          {isSpeaker && userNudgeLines.length === 0 && (
+            <motion.div
+              key={'speech-' + agentId}
+              initial={{ opacity: 0, x: 8, y: 4, scale: 0.9 }}
+              animate={{ opacity: 1, x: 0, y: [0, -1, 0], scale: [1, 1.03, 1] }}
+              exit={{ opacity: 0, x: 5, y: 2, scale: 0.92 }}
+              transition={{
+                opacity: { duration: 0.16, ease: 'easeOut' },
+                x: { type: 'spring', stiffness: 280, damping: 24 },
+                y: { duration: 1.9, repeat: Infinity, ease: 'easeInOut' },
+                scale: { duration: 0.24, ease: 'easeOut' },
+              }}
+              className="absolute pointer-events-none"
+              style={{
+                top: '-4%',
+                left: '102%',
+                transform: `scale(${depth.phraseCompensationScale.toFixed(2)})`,
+                transformOrigin: 'left bottom',
+                zIndex: 25,
+              }}
+            >
+              <div
+                style={{
+                  minWidth: 102,
+                  maxWidth: 148,
+                  fontFamily: "'ZCOOL KuaiLe', cursive",
+                  fontSize: 12,
+                  lineHeight: 1.52,
+                  letterSpacing: '0.03em',
+                  background: 'linear-gradient(160deg, rgba(255, 253, 249, 0.98) 0%, rgba(241, 255, 245, 0.95) 100%)',
+                  backdropFilter: 'blur(2px)',
+                  padding: '6px 11px',
+                  borderRadius: '16px 16px 16px 8px',
+                  boxShadow: '0 6px 16px rgba(88, 110, 96, 0.16), 0 1px 0 rgba(255,255,255,0.5) inset',
+                  color: 'hsl(152, 30%, 24%)',
+                  border: '1px solid rgba(159, 193, 171, 0.36)',
+                  width: `${DIALOGUE_LINE_CHARS}em`,
+                  whiteSpace: 'pre',
+                  position: 'relative',
+                }}
+              >
+                {dialogueBubbleText}
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: -5,
+                    top: '72%',
+                    transform: 'translateY(-50%) rotate(45deg)',
+                    width: 10,
+                    height: 10,
+                    background: 'rgba(248, 255, 246, 0.96)',
+                    borderLeft: '1px solid rgba(159, 193, 171, 0.36)',
+                    borderBottom: '1px solid rgba(159, 193, 171, 0.36)',
+                  }}
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* A2A 对话气泡 — 倾听方（右侧） */}
+        <AnimatePresence>
+          {isListener && !isSpeaker && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute pointer-events-none"
+              style={{
+                top: '14%',
+                left: '104%',
+                transform: `scale(${depth.phraseCompensationScale.toFixed(2)})`,
+                transformOrigin: 'left center',
+                zIndex: 24,
+              }}
+            >
+              <motion.div
+                animate={{ opacity: [0.42, 0.9, 0.42], y: [0, -1, 0] }}
+                transition={{ duration: 1.25, repeat: Infinity, ease: 'easeInOut' }}
+                style={{
+                  fontFamily: "'ZCOOL KuaiLe', cursive",
+                  fontSize: 13,
+                  color: 'hsl(152, 26%, 42%)',
+                  letterSpacing: '0.16em',
+                  userSelect: 'none',
+                  lineHeight: 1,
+                  background: 'rgba(249, 255, 249, 0.82)',
+                  border: '1px solid rgba(156, 190, 168, 0.33)',
+                  borderRadius: 999,
+                  padding: '4px 8px',
+                  boxShadow: '0 3px 10px rgba(88, 110, 96, 0.12)',
+                }}
+              >
+                ···
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>

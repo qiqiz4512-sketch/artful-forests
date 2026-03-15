@@ -1,10 +1,12 @@
 import { create } from 'zustand';
-import { ActiveChat, AddTreeInput, ChatHistoryEntry, GlobalSocialEffects, NarrativeMode, SceneTreeSnapshot, SocialState, SocialWeather, TreeAgent } from '@/types/forest';
+import { ActiveChat, AddTreeInput, ChatHistoryEntry, GlobalSocialEffects, NarrativeMode, SceneTreeSnapshot, SocialState, SocialWeather, SpeakingPace, TreeAgent } from '@/types/forest';
 import { generateRandomProfile } from '@/lib/agentProfile';
 import { getWorldEcologySocialMood, inferWorldWidthFromPositions } from '@/lib/worldEcology';
 
 const CHAT_HISTORY_LIMIT = 120;
 const DEFAULT_WORLD_WIDTH = 5000;
+const CHATTERBOX_RATIO = 0.4;
+const NORMAL_RATIO = 0.45;
 
 interface ForestStoreState {
   agents: TreeAgent[];
@@ -34,6 +36,39 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 
 const ensureUnique = (items: string[]) => [...new Set(items.filter(Boolean))];
 const INTERACTION_MEMORY_LIMIT = 3;
+
+const hashToUnit = (seed: string) => {
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967295;
+};
+
+const resolveSpeakingPace = (
+  metadata: { speakingPace?: SpeakingPace; chatterbox?: boolean },
+  seed: string,
+): SpeakingPace => {
+  if (metadata.speakingPace) return metadata.speakingPace;
+  if (metadata.chatterbox) return 'chatterbox';
+  const roll = hashToUnit(seed);
+  if (roll < CHATTERBOX_RATIO) return 'chatterbox';
+  if (roll < CHATTERBOX_RATIO + NORMAL_RATIO) return 'normal';
+  return 'shy';
+};
+
+const normalizeAgentMetadata = (
+  metadata: { bio: string; lastWords: string; chatterbox?: boolean; speakingPace?: SpeakingPace },
+  seed: string,
+) => {
+  const speakingPace = resolveSpeakingPace(metadata, seed);
+  return {
+    ...metadata,
+    speakingPace,
+    chatterbox: speakingPace === 'chatterbox' ? true : Boolean(metadata.chatterbox),
+  };
+};
 
 const createInitialMemory = () => ({
   lastTopic: '',
@@ -131,7 +166,7 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
         ...tree.memory,
         interactionHistory: tree.memory?.interactionHistory ?? [],
       },
-      metadata: tree.metadata,
+      metadata: normalizeAgentMetadata(tree.metadata, tree.id),
       shape: tree.shape,
     };
 
@@ -344,13 +379,18 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
         neighbors: prev?.neighbors ?? [],
         isManual: prev?.isManual ?? false,
         memory: prev?.memory ?? createInitialMemory(),
-        metadata: profile.metadata,
+        metadata: normalizeAgentMetadata(profile.metadata, tree.id),
         shape: prev?.shape,
       } satisfies TreeAgent;
     });
 
     const sceneIdSet = new Set(trees.map((tree) => tree.id));
-    const offSceneAgents = get().agents.filter((agent) => !sceneIdSet.has(agent.id));
+    const offSceneAgents = get().agents
+      .filter((agent) => !sceneIdSet.has(agent.id))
+      .map((agent) => ({
+        ...agent,
+        metadata: normalizeAgentMetadata(agent.metadata, agent.id),
+      }));
 
     set({ agents: withNeighbors([...nextAgents, ...offSceneAgents]) });
   },

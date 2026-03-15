@@ -73,6 +73,7 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
   const isTalking = !isSilent && (activeChat?.treeAId === agentId || activeChat?.treeBId === agentId);
   const isRecallingMemory = Boolean(self && Date.now() < (self.memory?.recallingUntil ?? 0));
   const isManual = Boolean(self?.isManual);
+  const isChatterbox = Boolean(self?.metadata?.chatterbox);
   const tone = isManual ? '神启' : personality ?? '温柔';
   const symbol = PERSONALITY_SYMBOL[tone] ?? '·';
 
@@ -126,9 +127,9 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
     <div
       className="absolute pointer-events-none"
       style={{
-        left: '50%',
+        left: '62%',
         bottom: '100%',
-        transform: 'translateX(-50%)',
+        transform: 'translateX(-38%)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -224,9 +225,35 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
                 {stageTitle}
               </motion.div>
 
+              {isChatterbox && (
+                <motion.div
+                  animate={{ y: [0, -0.8, 0], opacity: [0.75, 1, 0.75] }}
+                  transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+                  style={{
+                    marginTop: 7,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    alignSelf: 'center',
+                    padding: '3px 8px',
+                    borderRadius: 999,
+                    border: `1px solid ${primary}44`,
+                    background: 'rgba(248, 255, 248, 0.8)',
+                    fontFamily: 'var(--font-handwritten)',
+                    fontSize: 11,
+                    lineHeight: 1,
+                    color: `${deep}dd`,
+                    letterSpacing: '0.04em',
+                    boxShadow: `0 2px 8px ${primary}26`,
+                  }}
+                >
+                  💬 话痨
+                </motion.div>
+              )}
+
               <div
                 style={{
-                  marginTop: 7,
+                  marginTop: isChatterbox ? 6 : 7,
                   textAlign: 'center',
                   fontFamily: 'var(--font-handwritten)',
                   fontSize: 14,
