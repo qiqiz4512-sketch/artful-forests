@@ -12,6 +12,7 @@ import {
 import { PERSONA_MATRIX, PersonaKey } from '@/constants/personaMatrix';
 import { TreeAgent, TreePersonality } from '@/types/forest';
 import { pickShapeByWorldEcology } from '@/lib/worldEcology';
+import { applyTreePersonaFlavor } from '@/lib/treePersonaRuntime';
 
 export type SocialRelationType = 'partner' | 'family' | 'friend' | 'stranger';
 
@@ -352,10 +353,10 @@ export function generateSocialChat(
   const gagChance = context.intimacy && context.intimacy >= 70 ? baseChance + 0.08 : baseChance;
 
   if (gagPool.length > 0 && Math.random() < gagChance) {
-    return `${baseLine} ${randomIn(gagPool)}`;
+    return applyTreePersonaFlavor(sender, `${baseLine} ${randomIn(gagPool)}`);
   }
 
-  return baseLine;
+  return applyTreePersonaFlavor(sender, baseLine);
 }
 
 export function resolveMemoryCue(sender: TreeAgent, receiver: TreeAgent, now = Date.now()): MemoryCueResult | null {

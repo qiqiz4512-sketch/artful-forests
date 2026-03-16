@@ -2,44 +2,28 @@ import { useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAnimationControls } from 'framer-motion';
 
-export type ForestAuthMode = 'register' | 'login';
-
 interface Props {
   open: boolean;
-  identifier: string;
-  email: string;
-  password: string;
-  mode: ForestAuthMode;
   errorMessage?: string;
   errorPulse?: number;
-  canSubmit?: boolean;
-  isSubmitting?: boolean;
-  submitLabel?: string;
-  onIdentifierChange: (value: string) => void;
-  onEmailChange: (value: string) => void;
-  onPasswordChange: (value: string) => void;
-  onSubmit: () => void;
-  onSwitchMode: (mode: ForestAuthMode) => void;
+  ssoLabel?: string;
+  ssoSubmitting?: boolean;
+  ssoDisabled?: boolean;
+  onSsoSubmit: () => void;
   onCancel: () => void;
+  forceAuth?: boolean;
 }
 
 export default function ForestLoginModal({
   open,
-  identifier,
-  email,
-  password,
-  mode,
   errorMessage,
   errorPulse = 0,
-  canSubmit = true,
-  isSubmitting = false,
-  submitLabel,
-  onIdentifierChange,
-  onEmailChange,
-  onPasswordChange,
-  onSubmit,
-  onSwitchMode,
+  ssoLabel = '使用 SecondMe 单点登录',
+  ssoSubmitting = false,
+  ssoDisabled = false,
+  onSsoSubmit,
   onCancel,
+  forceAuth = false,
 }: Props) {
   const shakeControls = useAnimationControls();
 
@@ -50,6 +34,21 @@ export default function ForestLoginModal({
       transition: { duration: 0.34, ease: 'easeInOut' },
     });
   }, [errorPulse, open, shakeControls]);
+
+  useEffect(() => {
+    if (!open || forceAuth) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onCancel();
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [forceAuth, onCancel, open]);
 
   return (
     <AnimatePresence>
@@ -65,7 +64,9 @@ export default function ForestLoginModal({
             type="button"
             className="absolute inset-0"
             aria-label="关闭登录弹窗"
-            onClick={onCancel}
+            onClick={() => {
+              if (!forceAuth) onCancel();
+            }}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -121,83 +122,8 @@ export default function ForestLoginModal({
                 认领你的森林通行证
               </h2>
 
-              <label className="block" htmlFor="forest-login-identifier">
-                <span className="sr-only">输入账号</span>
-                <input
-                  id="forest-login-identifier"
-                  className="forest-login-input w-full"
-                  autoFocus
-                  type="text"
-                  value={identifier}
-                  maxLength={48}
-                  aria-invalid={Boolean(errorMessage)}
-                  placeholder={mode === 'register' ? '设置用户名' : '邮箱或用户名'}
-                  onChange={(event) => onIdentifierChange(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      onSubmit();
-                    }
-                    if (event.key === 'Escape') {
-                      event.preventDefault();
-                      onCancel();
-                    }
-                  }}
-                />
-              </label>
-
-              {mode === 'register' && (
-                <label className="block mt-3" htmlFor="forest-login-email">
-                  <span className="sr-only">输入邮箱</span>
-                  <input
-                    id="forest-login-email"
-                    className="forest-login-input w-full"
-                    type="email"
-                    value={email}
-                    maxLength={120}
-                    aria-invalid={Boolean(errorMessage)}
-                    placeholder="输入邮箱"
-                    onChange={(event) => onEmailChange(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        onSubmit();
-                      }
-                      if (event.key === 'Escape') {
-                        event.preventDefault();
-                        onCancel();
-                      }
-                    }}
-                  />
-                </label>
-              )}
-
-              <label className="block mt-3" htmlFor="forest-login-password">
-                <span className="sr-only">输入密码</span>
-                <input
-                  id="forest-login-password"
-                  className="forest-login-input w-full"
-                  type="password"
-                  value={password}
-                  maxLength={72}
-                  aria-invalid={Boolean(errorMessage)}
-                  placeholder={mode === 'register' ? '设置密码（至少 6 位）' : '输入密码'}
-                  onChange={(event) => onPasswordChange(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      onSubmit();
-                    }
-                    if (event.key === 'Escape') {
-                      event.preventDefault();
-                      onCancel();
-                    }
-                  }}
-                />
-              </label>
-
               <div
-                className="min-h-[22px] mt-1"
+                className="min-h-[22px] mt-1 mb-5"
                 style={{
                   color: 'rgba(196, 255, 169, 0.92)',
                   fontSize: 12,
@@ -206,18 +132,28 @@ export default function ForestLoginModal({
                 {errorMessage || ''}
               </div>
 
-              <div className="mt-5 flex items-center justify-center gap-3">
+              <div className="mt-5 flex items-center justify-center">
                 <div className="relative inline-flex w-full max-w-[250px]">
                   <motion.button
                     type="button"
-                    className="forest-login-primary"
-                    onClick={onSubmit}
-                    disabled={!canSubmit || isSubmitting}
-                    aria-disabled={!canSubmit || isSubmitting}
+                    className="forest-login-switch"
+                    onClick={onSsoSubmit}
+                    disabled={ssoSubmitting || ssoDisabled}
+                    aria-disabled={ssoSubmitting || ssoDisabled}
                     whileHover={{ scale: 1.03 }}
                     whileTap={{ scale: 0.97 }}
+                    style={{
+                      width: '100%',
+                      maxWidth: 250,
+                      borderRadius: 999,
+                      border: '1px solid rgba(215, 239, 206, 0.35)',
+                      padding: '10px 16px',
+                      color: ssoDisabled ? 'rgba(200, 212, 202, 0.72)' : 'rgba(228, 246, 231, 0.92)',
+                      background: ssoDisabled ? 'rgba(28, 62, 46, 0.22)' : 'rgba(28, 62, 46, 0.36)',
+                      cursor: ssoDisabled ? 'not-allowed' : 'pointer',
+                    }}
                   >
-                    {isSubmitting ? '提交中...' : submitLabel ?? (mode === 'register' ? '注册' : '登录')}
+                    {ssoSubmitting ? '跳转中...' : ssoLabel}
                   </motion.button>
 
                   <span
@@ -227,16 +163,6 @@ export default function ForestLoginModal({
                     🐿️
                   </span>
                 </div>
-              </div>
-
-              <div className="mt-4 flex flex-col items-center justify-center gap-2">
-                <button
-                  type="button"
-                  className="forest-login-switch"
-                  onClick={() => onSwitchMode(mode === 'register' ? 'login' : 'register')}
-                >
-                  {mode === 'register' ? '已有账号，直接登录' : '没有账号，去注册'}
-                </button>
               </div>
             </motion.div>
           </motion.div>

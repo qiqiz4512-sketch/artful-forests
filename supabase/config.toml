@@ -1,0 +1,6 @@
+# Supabase local/project configuration for Edge Functions.
+# This function is invoked before the user has a Supabase auth session,
+# so JWT verification must be disabled at the function layer.
+
+[functions.secondme-oauth-exchange]
+verify_jwt = false

@@ -76,8 +76,7 @@ Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/c
 
 This project now supports authentication with:
 
-- Email + password login
-- Username + password login
+- SecondMe SSO only
 
 ### 1) Configure env vars
 
@@ -86,22 +85,59 @@ Create a `.env` file in the project root (or copy `.env.example`):
 ```bash
 VITE_SUPABASE_URL=https://giooyiclaivgxmedfljk.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
+
+# Enable SecondMe login modal
+VITE_SECONDME_SSO_ENABLED=true
+
+# Preferred (Supabase Enterprise SSO)
+# Example: sso_1234567890abcdef
+VITE_SECONDME_SSO_PROVIDER_ID=
+
+# Optional fallback (OAuth/OIDC provider name). Leave empty unless configured in Supabase.
+VITE_SECONDME_OAUTH_PROVIDER=
+VITE_SECONDME_OAUTH_SCOPE="openid profile email"
+VITE_SECONDME_OAUTH_ACCESS_TYPE=offline
+VITE_SECONDME_OAUTH_PROMPT=consent
+# If your Supabase OIDC setup needs a query-level provider key, set this value.
+# Example: secondme
+VITE_SECONDME_OAUTH_QUERY_PROVIDER=
 ```
 
 ### 2) Initialize Supabase SQL
 
 Run the SQL in `supabase/auth_setup.sql` inside your Supabase SQL Editor.
 
-### 3) Make sure email auth is enabled
+### Notes
+
+- SecondMe SSO button appears only when `VITE_SECONDME_SSO_ENABLED=true`.
+- Login call priority: `VITE_SECONDME_SSO_PROVIDER_ID` -> `VITE_SECONDME_OAUTH_PROVIDER`.
+- If neither is set, login is blocked with a config error prompt.
+- SSO completion relies on `supabase.auth.onAuthStateChange`; successful login syncs SecondMe identity through `secondme_upsert_identity`.
+
+### 3) Configure SecondMe in Supabase
 
 In Supabase Dashboard:
 
-- Authentication -> Providers -> Email: enabled
-- If you require email confirmation, new registrations must verify email before first login.
+Option A (recommended): Enterprise SSO
 
-### Notes
+- Authentication -> SSO -> create provider
+- Copy provider ID and set `VITE_SECONDME_SSO_PROVIDER_ID`
 
-- Registration flow creates/updates a row in `public.profiles`.
-- Username login resolves email through RPC (`resolve_login_email`) before calling Supabase password login.
-- Username availability check uses RPC (`is_username_available`) to avoid anonymous profile table reads.
-- Email availability check uses RPC (`is_email_available`) to avoid repeated sign-up email rate-limit hits.
+Option B: OAuth / OIDC provider
+
+- Authentication -> Providers -> configure your OIDC provider for SecondMe
+- Set `VITE_SECONDME_OAUTH_PROVIDER` to that provider name (do not use `oidc` unless actually enabled)
+- Add your callback URLs (Supabase callback + app redirect URL)
+
+After this is configured, users can click "使用 SecondMe 单点登录" in the login modal.
+
+## SecondMe 数据桥接
+
+- 桥接建表 SQL：`supabase/secondme_bridge_setup.sql`
+- 信息表规划文档：`doc/secondme-桥接信息表规划.md`
+- 最小可用 RPC：`secondme_upsert_identity`、`secondme_enqueue_outbox`、`secondme_ingest_inbox`、`secondme_mark_inbox_processed`
+
+建议执行顺序：
+
+1. 先执行 `supabase/auth_setup.sql`
+2. 再执行 `supabase/secondme_bridge_setup.sql`

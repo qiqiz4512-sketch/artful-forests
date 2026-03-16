@@ -1,6 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { User } from '@supabase/supabase-js';
 import type { WeatherType } from '@/components/Particles';
 import { useTimeTheme, type TimeMode } from '@/hooks/useTimeTheme';
 import ParallaxBackground from '@/components/ParallaxBackground';
@@ -19,7 +18,7 @@ import ChatPanel from '@/components/ChatPanel';
 import BgmMushroom from '@/components/BgmMushroom';
 import TreeSpeciesPanel from '@/components/TreeSpeciesPanel';
 import CelestialCelebration from '@/components/CelestialCelebration';
-import ForestLoginModal, { type ForestAuthMode } from '@/components/ForestLoginModal';
+import ForestLoginModal from '@/components/ForestLoginModal';
 import { getTreeDepthMetrics } from '@/lib/treeDepth';
 import { useForestStore } from '@/stores/useForestStore';
 import { ChatHistoryEntry, SceneTreeSnapshot } from '@/types/forest';
@@ -28,6 +27,16 @@ import { useForestEcology } from '@/hooks/useForestEcology';
 import { useAutoPlanting, renderTreeShapeToDataUrl } from '@/hooks/useAutoPlanting';
 import { generateRandomProfile } from '@/lib/agentProfile';
 import { generateClusteredTrees } from '@/lib/forestClusters';
+import {
+  buildSecondMeAuthorizeUrl,
+  clearSecondMeCallbackParams,
+  clearSecondMeSession,
+  consumeSecondMeState,
+  createSecondMeState,
+  loadSecondMeSession,
+  readSecondMeCallbackParams,
+  saveSecondMeSession,
+} from '@/lib/secondmeAuth';
 import { supabase } from '@/lib/supabase';
 import { getWorldEcologyAtmosphere, getWorldEcologyZone, pickShapeByWorldEcology } from '@/lib/worldEcology';
 
@@ -52,35 +61,13 @@ const GUARDIAN_MESSAGE_COOLDOWN_MS = 180000;
 const GUARDIAN_MESSAGE = '我一直在看着这片森林，也在等你。';
 const FOREST_BGM_AUDIO_URL = '/assets/forest-bgm.mp3';
 const FOREST_BGM_ICON_URL = '/assets/bgm-mushroom.png';
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const USERNAME_PATTERN = /^[\p{L}\p{N}_-]{2,24}$/u;
-const AUTH_RATE_LIMIT_COOLDOWN_SECONDS = 60;
-
-function isRateLimitAuthError(message: string): boolean {
-  const source = message.toLowerCase();
-  return source.includes('email rate limit exceeded')
-    || source.includes('over_email_send_rate_limit')
-    || source.includes('over_request_rate_limit')
-    || source.includes('too many requests')
-    || source.includes('for security purposes, you can only request this after');
-}
-
-function getRateLimitCooldownSeconds(message: string): number {
-  const source = message.toLowerCase();
-  const secondMatch = source.match(/(\d+)\s*second/);
-  if (secondMatch) return Math.max(1, Number(secondMatch[1]));
-
-  const minuteMatch = source.match(/(\d+)\s*minute/);
-  if (minuteMatch) return Math.max(1, Number(minuteMatch[1]) * 60);
-
-  return AUTH_RATE_LIMIT_COOLDOWN_SECONDS;
-}
-
-function isMissingRpcFunctionError(message: string, functionName: string): boolean {
-  const source = message.toLowerCase();
-  return source.includes(`could not find the function public.${functionName}`)
-    || (source.includes('schema cache') && source.includes(functionName.toLowerCase()));
-}
+const SUPABASE_ANON_PLACEHOLDER = 'your-anon-key';
+const SECONDME_OAUTH_AUTHORIZE_URL = import.meta.env.VITE_SECONDME_OAUTH_AUTHORIZE_URL?.trim() ?? 'https://go.second.me/oauth/';
+const SECONDME_REDIRECT_URI = import.meta.env.VITE_SECONDME_REDIRECT_URI?.trim() ?? `${window.location.origin}/`;
+const SECONDME_RESPONSE_TYPE = import.meta.env.VITE_SECONDME_RESPONSE_TYPE?.trim() ?? 'code';
+const SECONDME_SCOPE = import.meta.env.VITE_SECONDME_SCOPE?.trim() ?? 'user.info chat';
+const SECONDME_CLIENT_ID = import.meta.env.VITE_SECONDME_CLIENT_ID?.trim() ?? '';
+const SECONDME_DEV_EXCHANGE_PATH = '/api/secondme/oauth/exchange';
 
 function mapAuthErrorMessage(message: string): string {
   const source = message.toLowerCase();
@@ -91,15 +78,12 @@ function mapAuthErrorMessage(message: string): string {
   if (source.includes('password should be at least')) return '密码至少需要 6 位';
   if (source.includes('email address') && source.includes('invalid')) return '邮箱格式不正确';
   if (source.includes('email rate limit exceeded') || source.includes('over_email_send_rate_limit')) return '邮件发送触发限流，请稍后再试或直接登录';
+  if (source.includes('invalid state')) return 'SecondMe 登录状态校验失败，请重试';
+  if (source.includes('redirect uri')) return 'SecondMe 回调地址不匹配，请检查 VITE_SECONDME_REDIRECT_URI';
+  if (source.includes('failed to fetch') || source.includes('cors')) return '登录回调请求被拦截，请检查本地开发代理或 Supabase Edge Function 部署';
   if (source.includes('network')) return '网络异常，请稍后重试';
 
   return message;
-}
-
-interface ProfileRow {
-  id: string;
-  username: string | null;
-  email: string | null;
 }
 
 type SeasonMode = 'spring' | 'summer' | 'autumn' | 'winter' | 'auto';
@@ -212,15 +196,10 @@ function createLegacySampleTreeImage(index: number): string {
 
 export default function Index() {
   const [username, setUsername] = useState<string | null>(null);
-  const [loginModalOpen, setLoginModalOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<ForestAuthMode>('register');
-  const [identifierInput, setIdentifierInput] = useState('');
-  const [emailInput, setEmailInput] = useState('');
+  const [authInitializing, setAuthInitializing] = useState(true);
+  const [loginModalOpen, setLoginModalOpen] = useState(true);
   const [loginError, setLoginError] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
-  const [authSubmitting, setAuthSubmitting] = useState(false);
-  const [authCooldownUntil, setAuthCooldownUntil] = useState<number | null>(null);
-  const [cooldownNow, setCooldownNow] = useState(Date.now());
+  const [ssoSubmitting, setSsoSubmitting] = useState(false);
   const [loginErrorPulse, setLoginErrorPulse] = useState(0);
   const [loginPulse, setLoginPulse] = useState(0);
   const [season, setSeason] = useState<SeasonMode>('auto');
@@ -287,29 +266,21 @@ export default function Index() {
   const activeEcologyAtmosphere = getWorldEcologyAtmosphere(visibleWorldCenterX, worldWidth);
   const minPlantY = viewportHeight * 0.55;
   const maxPlantY = viewportHeight * 0.85;
-  const authCooldownSeconds = authCooldownUntil === null
-    ? 0
-    : Math.max(0, Math.ceil((authCooldownUntil - cooldownNow) / 1000));
-  const authCooldownMessage = authCooldownSeconds > 0 ? `邮件发送限流，请 ${authCooldownSeconds} 秒后重试` : '';
+  const authLocked = authInitializing || !username;
+  const hasAnonKeyConfigured = Boolean(import.meta.env.VITE_SUPABASE_ANON_KEY) && import.meta.env.VITE_SUPABASE_ANON_KEY !== SUPABASE_ANON_PLACEHOLDER;
+  const hasSecondMeClientConfigured = Boolean(SECONDME_CLIENT_ID);
+  const hasSecondMeAuthorizeUrlConfigured = Boolean(SECONDME_OAUTH_AUTHORIZE_URL);
+  const hasSecondMeRedirectUriConfigured = Boolean(SECONDME_REDIRECT_URI);
+  const authConfigErrorMessage = !hasAnonKeyConfigured
+    ? 'Supabase 未配置：请在 .env 设置 VITE_SUPABASE_ANON_KEY'
+    : (!hasSecondMeClientConfigured
+      ? 'SecondMe 登录未配置：请设置 VITE_SECONDME_CLIENT_ID'
+      : (!hasSecondMeAuthorizeUrlConfigured
+        ? 'SecondMe 登录未配置：请设置 VITE_SECONDME_OAUTH_AUTHORIZE_URL'
+        : (!hasSecondMeRedirectUriConfigured
+          ? 'SecondMe 登录未配置：请设置 VITE_SECONDME_REDIRECT_URI'
+          : '')));
   const { emissionRateMultiplier } = useForestEcology();
-
-  useEffect(() => {
-    if (authCooldownUntil === null) return;
-
-    const timer = window.setInterval(() => {
-      setCooldownNow(Date.now());
-    }, 1000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [authCooldownUntil]);
-
-  useEffect(() => {
-    if (authCooldownUntil === null) return;
-    if (Date.now() < authCooldownUntil) return;
-    setAuthCooldownUntil(null);
-  }, [authCooldownUntil, cooldownNow]);
   const showTreeNotice = useCallback((text: string, sub: string, emoji: string, durationMs = 3200, treeId?: string) => {
     if (treeNoticeTimerRef.current !== null) {
       window.clearTimeout(treeNoticeTimerRef.current);
@@ -332,321 +303,207 @@ export default function Index() {
     }, durationMs);
   }, []);
 
-  const resolveProfileLabel = useCallback(async (user: User | null): Promise<string | null> => {
-    if (!user) return null;
-
-    const { data } = await supabase
-      .from('profiles')
-      .select('username,email')
-      .eq('id', user.id)
-      .maybeSingle<Pick<ProfileRow, 'username' | 'email'>>();
-
-    const profileUsername = data?.username?.trim();
-    if (profileUsername) return profileUsername;
-
-    const metadataUsername = typeof user.user_metadata?.username === 'string' ? user.user_metadata.username.trim() : '';
-    if (metadataUsername) return metadataUsername;
-
-    return user.email ?? null;
-  }, []);
-
   const showAuthError = useCallback((rawMessage: string) => {
-    if (isRateLimitAuthError(rawMessage)) {
-      const waitSeconds = getRateLimitCooldownSeconds(rawMessage);
-      setAuthCooldownUntil(Date.now() + waitSeconds * 1000);
-      setCooldownNow(Date.now());
-      setLoginError('');
-      setLoginErrorPulse((prev) => prev + 1);
-      return;
-    }
-
     setLoginError(mapAuthErrorMessage(rawMessage));
     setLoginErrorPulse((prev) => prev + 1);
+  }, []);
+
+  const exchangeSecondMeCode = useCallback(async (code: string) => {
+    if (import.meta.env.DEV) {
+      const response = await fetch(SECONDME_DEV_EXCHANGE_PATH, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          code,
+          redirectUri: SECONDME_REDIRECT_URI,
+          clientId: SECONDME_CLIENT_ID,
+        }),
+      });
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.details?.message ?? payload?.message ?? payload?.error ?? 'SecondMe 本地代理换 token 失败');
+      }
+
+      return payload;
+    }
+
+    const { data, error } = await supabase.functions.invoke('secondme-oauth-exchange', {
+      body: {
+        code,
+        redirectUri: SECONDME_REDIRECT_URI,
+        clientId: SECONDME_CLIENT_ID,
+      },
+    });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data;
   }, []);
 
   useEffect(() => {
     let active = true;
 
     const syncUser = async () => {
-      const { data } = await supabase.auth.getSession();
+      if (authConfigErrorMessage) {
+        if (!active) return;
+        setUsername(null);
+        setLoginModalOpen(true);
+        setAuthInitializing(false);
+        return;
+      }
+
+      const callback = readSecondMeCallbackParams();
+      if (callback.error) {
+        clearSecondMeCallbackParams();
+        if (!active) return;
+        showAuthError(callback.errorDescription ?? callback.error);
+        setUsername(null);
+        setLoginModalOpen(true);
+        setAuthInitializing(false);
+        return;
+      }
+
+      if (callback.code) {
+        const expectedState = consumeSecondMeState();
+        if (!callback.state || !expectedState || callback.state !== expectedState) {
+          clearSecondMeCallbackParams();
+          if (!active) return;
+          showAuthError('invalid state');
+          setUsername(null);
+          setLoginModalOpen(true);
+          setAuthInitializing(false);
+          return;
+        }
+
+        setSsoSubmitting(true);
+        setLoginError('');
+
+        clearSecondMeCallbackParams();
+        if (!active) return;
+
+        let data: Awaited<ReturnType<typeof exchangeSecondMeCode>> | null = null;
+        try {
+          data = await exchangeSecondMeCode(callback.code);
+        } catch (error) {
+          showAuthError(error instanceof Error ? error.message : 'SecondMe 登录失败');
+          setUsername(null);
+          setLoginModalOpen(true);
+          setAuthInitializing(false);
+          setSsoSubmitting(false);
+          return;
+        }
+
+        if (!data?.accessToken) {
+          showAuthError('SecondMe token 交换失败，请检查 Client ID / Client Secret / redirect_uri');
+          setUsername(null);
+          setLoginModalOpen(true);
+          setAuthInitializing(false);
+          setSsoSubmitting(false);
+          return;
+        }
+
+        const session = saveSecondMeSession({
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+          expiresIn: Number(data.expiresIn ?? 0),
+          scope: data.scope,
+          user: data.user ?? null,
+        });
+
+        const finalName = session.user?.name ?? session.user?.route ?? session.user?.email ?? '森林旅人';
+        setUsername(finalName);
+        setLoginModalOpen(false);
+        setAuthInitializing(false);
+        setSsoSubmitting(false);
+        setLoginPulse((prev) => prev + 1);
+        showTreeNotice(`欢迎回来，${finalName}`, 'SecondMe 通行证已激活', '🎐', 2600);
+        showAuthCelebration('通行证已激活', `${finalName}，欢迎回到森林`, '🎫');
+        return;
+      }
+
+      const session = loadSecondMeSession();
       if (!active) return;
-      const label = await resolveProfileLabel(data.session?.user ?? null);
-      if (!active) return;
-      setUsername(label);
+
+      if (!session) {
+        setUsername(null);
+        setLoginModalOpen(true);
+        setAuthInitializing(false);
+        return;
+      }
+
+      const finalName = session.user?.name ?? session.user?.route ?? session.user?.email ?? '森林旅人';
+      setUsername(finalName);
+      setLoginModalOpen(false);
+      setAuthInitializing(false);
     };
 
     void syncUser();
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      void (async () => {
-        const label = await resolveProfileLabel(session?.user ?? null);
-        if (!active) return;
-        setUsername(label);
-      })();
-    });
-
     return () => {
       active = false;
-      subscription.unsubscribe();
     };
-  }, [resolveProfileLabel]);
+  }, [SECONDME_CLIENT_ID, authConfigErrorMessage, showAuthCelebration, showAuthError, showTreeNotice]);
+
+  useEffect(() => {
+    if (authLocked) {
+      setLoginModalOpen(true);
+    }
+  }, [authLocked]);
 
   const handleLoginEntry = useCallback(async (): Promise<'login-success' | 'logout' | 'noop'> => {
-    if (authSubmitting) return 'noop';
+    if (ssoSubmitting) return 'noop';
 
     if (username) {
-      const { error } = await supabase.auth.signOut();
-      if (error) {
-        showAuthError(error.message);
-        return 'noop';
-      }
+      clearSecondMeSession();
       setUsername(null);
+      setLoginModalOpen(true);
       showTreeNotice('已退出登录', '你的森林身份已暂时离线', '👋', 2200);
       return 'logout';
     }
 
-    setAuthMode('login');
-    setIdentifierInput('');
-    setEmailInput('');
-    setPasswordInput('');
     setLoginError('');
     setLoginModalOpen(true);
     return 'noop';
-  }, [authSubmitting, showAuthError, showTreeNotice, username]);
+  }, [showAuthError, showTreeNotice, ssoSubmitting, username]);
 
-  const handleSubmitAuth = useCallback(async () => {
-    const trimmedIdentifier = identifierInput.trim();
-    const trimmedEmail = emailInput.trim().toLowerCase();
-    const trimmedPassword = passwordInput.trim();
+  const handleSecondMeSso = useCallback(async () => {
+    if (ssoSubmitting) return;
 
-    if (authCooldownSeconds > 0) {
-      setLoginErrorPulse((prev) => prev + 1);
+    if (authConfigErrorMessage) {
+      showAuthError(authConfigErrorMessage);
       return;
     }
 
-    if (!trimmedIdentifier) {
-      setLoginError(authMode === 'register' ? '请先设置用户名' : '请先输入邮箱或用户名');
-      setLoginErrorPulse((prev) => prev + 1);
-      return;
-    }
-
-    if (!trimmedPassword) {
-      setLoginError('请先输入密码');
-      setLoginErrorPulse((prev) => prev + 1);
-      return;
-    }
-
-    if (trimmedPassword.length < 6) {
-      setLoginError('密码至少需要 6 位');
-      setLoginErrorPulse((prev) => prev + 1);
-      return;
-    }
-
-    setAuthSubmitting(true);
+    setSsoSubmitting(true);
     setLoginError('');
 
     try {
-      if (authMode === 'register') {
-        if (!USERNAME_PATTERN.test(trimmedIdentifier)) {
-          setLoginError('用户名需 2-24 位，可用字母、数字、下划线或短横线');
-          setLoginErrorPulse((prev) => prev + 1);
-          return;
-        }
-
-        if (!EMAIL_PATTERN.test(trimmedEmail)) {
-          setLoginError('请输入有效邮箱');
-          setLoginErrorPulse((prev) => prev + 1);
-          return;
-        }
-
-        const { data: isEmailAvailable, error: emailCheckError } = await supabase
-          .rpc('is_email_available', { candidate: trimmedEmail });
-
-        if (emailCheckError) {
-          if (!isMissingRpcFunctionError(emailCheckError.message, 'is_email_available')) {
-            showAuthError(emailCheckError.message);
-            return;
-          }
-        }
-
-        if (isEmailAvailable === false) {
-          setAuthMode('login');
-          setIdentifierInput(trimmedEmail);
-          setLoginError('该邮箱已注册，请直接登录');
-          setLoginErrorPulse((prev) => prev + 1);
-          return;
-        }
-
-        const { data: isUsernameAvailable, error: usernameCheckError } = await supabase
-          .rpc('is_username_available', { candidate: trimmedIdentifier });
-
-        if (usernameCheckError) {
-          showAuthError(usernameCheckError.message);
-          return;
-        }
-
-        if (!isUsernameAvailable) {
-          setLoginError('该用户名已被使用，请换一个');
-          setLoginErrorPulse((prev) => prev + 1);
-          return;
-        }
-
-        const { data, error } = await supabase.auth.signUp({
-          email: trimmedEmail,
-          password: trimmedPassword,
-          options: {
-            data: { username: trimmedIdentifier },
-          },
-        });
-
-        if (error) {
-          if (isRateLimitAuthError(error.message)) {
-            // Supabase may rate-limit confirmation emails even when this account already exists.
-            const { data: fastLoginData, error: fastLoginError } = await supabase.auth.signInWithPassword({
-              email: trimmedEmail,
-              password: trimmedPassword,
-            });
-
-            if (!fastLoginError && fastLoginData.user) {
-              const profileLabel = await resolveProfileLabel(fastLoginData.user);
-              const finalName = profileLabel ?? fastLoginData.user.email ?? trimmedIdentifier;
-              setUsername(finalName);
-              setIdentifierInput('');
-              setEmailInput('');
-              setPasswordInput('');
-              setLoginPulse((prev) => prev + 1);
-              setLoginModalOpen(false);
-              showTreeNotice(`欢迎回来，${finalName}`, '检测到账号已存在，已为你直接登录', '🎐', 3000);
-              showAuthCelebration('登录成功', `${finalName}，已跳过重复注册流程`, '🎫');
-              return;
-            }
-          }
-
-          showAuthError(error.message);
-          return;
-        }
-
-        if (data.user) {
-          const { error: profileError } = await supabase
-            .from('profiles')
-            .upsert({
-              id: data.user.id,
-              username: trimmedIdentifier,
-              email: trimmedEmail,
-            }, { onConflict: 'id' });
-
-          if (profileError) {
-            setLoginError(`账号已创建，但资料写入失败：${profileError.message}`);
-            setLoginErrorPulse((prev) => prev + 1);
-            return;
-          }
-        }
-
-        setIdentifierInput('');
-        setEmailInput('');
-        setPasswordInput('');
-        setAuthMode('login');
-
-        if (!data.session) {
-          setLoginModalOpen(false);
-          showTreeNotice('注册成功', '请前往邮箱确认后再登录', '📮', 3200);
-          showAuthCelebration('注册完成', '已发送确认邮件，请完成验证', '🌿');
-          return;
-        }
-
-        setUsername(trimmedIdentifier);
-        setLoginPulse((prev) => prev + 1);
-        setLoginModalOpen(false);
-        showTreeNotice(`注册成功，${trimmedIdentifier}`, '森林通行证已激活', '🌲', 2800);
-        showAuthCelebration('注册完成', `${trimmedIdentifier}，你的森林身份已创建`, '🌿');
-        return;
-      }
-
-      const { data: resolvedEmail, error: resolveEmailError } = await supabase
-        .rpc('resolve_login_email', { identifier: trimmedIdentifier });
-
-      if (resolveEmailError) {
-        showAuthError(resolveEmailError.message);
-        return;
-      }
-
-      if (!resolvedEmail || !EMAIL_PATTERN.test(resolvedEmail)) {
-        setLoginError('未找到该账号，请检查后重试');
-        setLoginErrorPulse((prev) => prev + 1);
-        return;
-      }
-
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email: resolvedEmail.toLowerCase(),
-        password: trimmedPassword,
+      const state = createSecondMeState();
+      const authorizeUrl = buildSecondMeAuthorizeUrl({
+        authorizeUrl: SECONDME_OAUTH_AUTHORIZE_URL,
+        clientId: SECONDME_CLIENT_ID,
+        redirectUri: SECONDME_REDIRECT_URI,
+        responseType: SECONDME_RESPONSE_TYPE,
+        scope: SECONDME_SCOPE,
+        state,
       });
 
-      if (signInError) {
-        showAuthError(signInError.message);
-        return;
-      }
-
-      const profileLabel = await resolveProfileLabel(signInData.user);
-      const finalName = profileLabel ?? signInData.user.email ?? '森林旅人';
-      setUsername(finalName);
-      setIdentifierInput('');
-      setEmailInput('');
-      setPasswordInput('');
-      setLoginPulse((prev) => prev + 1);
-      setLoginModalOpen(false);
-      showTreeNotice(`欢迎回来，${finalName}`, '登录入口已在右上角激活', '🎐', 2600);
-      showAuthCelebration('通行证已激活', `${finalName}，欢迎回到森林`, '🎫');
+      window.location.assign(authorizeUrl);
     } finally {
-      setAuthSubmitting(false);
+      setSsoSubmitting(false);
     }
-  }, [authCooldownSeconds, authMode, emailInput, identifierInput, passwordInput, resolveProfileLabel, showAuthCelebration, showAuthError, showTreeNotice]);
+  }, [authConfigErrorMessage, showAuthError, ssoSubmitting]);
 
   const handleCancelLogin = useCallback(() => {
+    if (authLocked) return;
     setLoginModalOpen(false);
-    setIdentifierInput('');
-    setEmailInput('');
-    setPasswordInput('');
     setLoginError('');
-  }, []);
-
-  const handleIdentifierChange = useCallback((value: string) => {
-    setIdentifierInput(value);
-    if (loginError) {
-      setLoginError('');
-    }
-  }, [loginError]);
-
-  const handleEmailChange = useCallback((value: string) => {
-    setEmailInput(value);
-    if (loginError) {
-      setLoginError('');
-    }
-  }, [loginError]);
-
-  const handlePasswordChange = useCallback((value: string) => {
-    setPasswordInput(value);
-    if (loginError) {
-      setLoginError('');
-    }
-  }, [loginError]);
-
-  const handleSwitchAuthMode = useCallback((mode: ForestAuthMode) => {
-    setAuthMode(mode);
-    setLoginError('');
-    setIdentifierInput('');
-    setEmailInput('');
-    setPasswordInput('');
-  }, []);
-
-  const canSubmitAuth = authCooldownSeconds === 0 && (authMode === 'register'
-    ? USERNAME_PATTERN.test(identifierInput.trim()) && EMAIL_PATTERN.test(emailInput.trim().toLowerCase()) && passwordInput.trim().length >= 6
-    : identifierInput.trim().length >= 2 && passwordInput.trim().length >= 6);
-
-  const authSubmitLabel = authCooldownSeconds > 0
-    ? `${authCooldownSeconds}秒后重试`
-    : undefined;
+  }, [authLocked]);
 
   const {
     isAutoPlanting,
@@ -820,9 +677,14 @@ export default function Index() {
 
   // Handle planting
   const handlePlant = useCallback((imageData: string) => {
+    if (!username) {
+      setLoginModalOpen(true);
+      showTreeNotice('请先使用 SecondMe 登录', '登录后才可以播种你的树', '🔐', 2600);
+      return;
+    }
     setDrawingOpen(false);
     setPlantingImage(imageData);
-  }, []);
+  }, [showTreeNotice, username]);
 
   const playManualFirstHeartbeat = useCallback(() => {
     try {
@@ -872,6 +734,12 @@ export default function Index() {
 
   const handlePlace = useCallback((x: number, y: number) => {
     if (!plantingImage) return;
+    if (!username) {
+      setLoginModalOpen(true);
+      setPlantingImage(null);
+      showTreeNotice('请先使用 SecondMe 登录', '登录后才能把树种进森林', '🔐', 2600);
+      return;
+    }
     const h = window.innerHeight;
     // Clamp to lower portion (grass area)
     const clampedY = Math.max(h * 0.55, Math.min(h * 0.85, y));
@@ -935,7 +803,7 @@ export default function Index() {
     setNewTreeId(id);
     setPlantingImage(null);
     setTimeout(() => setNewTreeId(null), 3500);
-  }, [addTree, plantingImage, playManualFirstHeartbeat, scrollX, showTreeNotice, triggerDivineSurge, triggerGlobalSilence, worldWidth]);
+  }, [addTree, plantingImage, playManualFirstHeartbeat, scrollX, showTreeNotice, triggerDivineSurge, triggerGlobalSilence, username, worldWidth]);
 
   // Initial sample trees: clustered groves + legacy anchor trees
   useEffect(() => {
@@ -1713,30 +1581,41 @@ export default function Index() {
         )}
       </AnimatePresence>
 
+      {authLocked && (
+        <div
+          className="fixed inset-0 z-[120]"
+          style={{ background: 'transparent' }}
+          aria-hidden="true"
+        />
+      )}
+
       <ForestLoginModal
         open={loginModalOpen}
-        mode={authMode}
-        identifier={identifierInput}
-        email={emailInput}
-        password={passwordInput}
-        submitLabel={authSubmitLabel}
-        isSubmitting={authSubmitting}
-        errorMessage={authCooldownMessage || loginError}
+        ssoLabel="使用 SecondMe 单点登录"
+        ssoSubmitting={ssoSubmitting}
+        ssoDisabled={Boolean(authConfigErrorMessage)}
+        errorMessage={loginError || authConfigErrorMessage}
         errorPulse={loginErrorPulse}
-        canSubmit={canSubmitAuth}
-        onIdentifierChange={handleIdentifierChange}
-        onEmailChange={handleEmailChange}
-        onPasswordChange={handlePasswordChange}
-        onSubmit={handleSubmitAuth}
-        onSwitchMode={handleSwitchAuthMode}
+        onSsoSubmit={handleSecondMeSso}
         onCancel={handleCancelLogin}
+        forceAuth={authLocked}
       />
 
       {/* Wind Chime */}
       <WindChime username={username} onAuthAction={handleLoginEntry} loginPulse={loginPulse} />
 
       {/* Seed Button */}
-      <SeedButton onClick={() => setDrawingOpen(!drawingOpen)} isOpen={drawingOpen} />
+      <SeedButton
+        onClick={() => {
+          if (!username) {
+            setLoginModalOpen(true);
+            showTreeNotice('请先使用 SecondMe 登录', '登录后才可以开始播种', '🔐', 2600);
+            return;
+          }
+          setDrawingOpen(!drawingOpen);
+        }}
+        isOpen={drawingOpen}
+      />
 
       {/* Drawing Panel */}
       <DrawingPanel
