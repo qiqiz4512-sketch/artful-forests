@@ -26,6 +26,7 @@ const BRUSH_LABELS: Record<BrushType, string> = {
 
 export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [color, setColor] = useState(COLORS[0].value);
   const [brush, setBrush] = useState<BrushType>('watercolor');
@@ -39,6 +40,34 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
       setHasDrawn(false);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+
+    document.body.classList.toggle('drawing-mode-active', isOpen);
+    window.dispatchEvent(new CustomEvent('drawing-mode-change', { detail: { isOpen } }));
+
+    return () => {
+      document.body.classList.remove('drawing-mode-active');
+      window.dispatchEvent(new CustomEvent('drawing-mode-change', { detail: { isOpen: false } }));
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const panel = panelRef.current;
+      const target = event.target as Node | null;
+      if (!panel || (target && panel.contains(target))) return;
+      onClose();
+    };
+
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [isOpen, onClose]);
 
   const getPos = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     const canvas = canvasRef.current!;
@@ -136,11 +165,13 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
 
     if (maxX < minX || maxY < minY) return canvas.toDataURL('image/png');
 
-    const pad = 4;
-    minX = Math.max(0, minX - pad);
-    minY = Math.max(0, minY - pad);
-    maxX = Math.min(width - 1, maxX + pad);
-    maxY = Math.min(height - 1, maxY + pad);
+    const padX = 4;
+    const padTop = 4;
+    const padBottom = 0;
+    minX = Math.max(0, minX - padX);
+    minY = Math.max(0, minY - padTop);
+    maxX = Math.min(width - 1, maxX + padX);
+    maxY = Math.min(height - 1, maxY + padBottom);
 
     const cropW = maxX - minX + 1;
     const cropH = maxY - minY + 1;
@@ -161,11 +192,13 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
     <AnimatePresence>
       {isOpen && (
         <motion.div
-          initial={{ opacity: 0, scale: 0.8, y: 50 }}
+          ref={panelRef}
+          initial={{ opacity: 0, scale: 0.94, y: 16 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.7, y: 80 }}
-          transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-          className="fixed z-50 bottom-24 right-4 sm:right-8"
+          exit={{ opacity: 0, scale: 0.92, y: 18 }}
+          transition={{ duration: 0.22, ease: [0.2, 0.9, 0.2, 1] }}
+          className="drawing-panel-cursor fixed z-50 bottom-24 right-4 sm:right-8"
+          data-brush={brush}
           style={{
             background: 'linear-gradient(145deg, rgba(255,252,245,0.97), rgba(245,240,230,0.97))',
             borderRadius: '12px 16px 10px 18px',
@@ -186,7 +219,7 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
               ref={canvasRef}
               width={300}
               height={300}
-              className="rounded-sm cursor-crosshair touch-none"
+              className={`rounded-sm touch-none drawing-brush-${brush}`}
               style={{
                 border: '1.5px dashed rgba(160,150,130,0.4)',
                 borderRadius: '4px 8px 6px 10px',

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Long+Cang&family=ZCOOL+KuaiLe&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -48,6 +48,9 @@
     --night-start: 232 73% 29%;
     --night-end: 231 44% 44%;
 
+    /* Handwritten font */
+    --font-handwritten: 'ZCOOL KuaiLe', cursive;
+
     --sidebar-background: 0 0% 98%;
     --sidebar-foreground: 240 5.3% 26.1%;
     --sidebar-primary: 240 5.9% 10%;
@@ -60,8 +63,84 @@
 }
 
 @layer base {
+  :root {
+    --cursor-squirrel-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%90%BF%EF%B8%8F%3C/text%3E%3C/svg%3E");
+    --cursor-squirrel-pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 32'%3E%3Ctext y='26' font-size='23'%3E%F0%9F%90%BF%EF%B8%8F%3C/text%3E%3Ctext x='19' y='12' font-size='11'%3E%E2%9C%A8%3C/text%3E%3C/svg%3E");
+    --cursor-squirrel-grab: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 38 32'%3E%3Ctext y='26' font-size='23'%3E%F0%9F%90%BF%EF%B8%8F%3C/text%3E%3Ctext x='19' y='13' font-size='12'%3E%F0%9F%AA%B5%3C/text%3E%3C/svg%3E");
+    --cursor-squirrel-grabbing: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 32'%3E%3Ctext y='26' font-size='23'%3E%F0%9F%90%BF%EF%B8%8F%3C/text%3E%3Ctext x='19' y='13' font-size='12'%3E%F0%9F%8C%B0%3C/text%3E%3C/svg%3E");
+    --cursor-squirrel-text: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 32'%3E%3Ctext y='26' font-size='23'%3E%F0%9F%90%BF%EF%B8%8F%3C/text%3E%3Ctext x='20' y='13' font-size='12'%3E%F0%9F%93%9D%3C/text%3E%3C/svg%3E");
+    --cursor-squirrel-disabled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 32'%3E%3Ctext y='26' font-size='23'%3E%F0%9F%90%BF%EF%B8%8F%3C/text%3E%3Ctext x='19' y='13' font-size='12'%3E%E2%9B%94%3C/text%3E%3C/svg%3E");
+    --cursor-brush-watercolor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Ctext y='28' font-size='24'%3E%F0%9F%96%8D%EF%B8%8F%3C/text%3E%3C/svg%3E");
+    --cursor-brush-crayon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Ctext y='28' font-size='24'%3E%F0%9F%96%8D%EF%B8%8F%3C/text%3E%3C/svg%3E");
+    --cursor-brush-pen: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Ctext y='28' font-size='24'%3E%E2%9C%92%EF%B8%8F%3C/text%3E%3C/svg%3E");
+  }
+
   * {
     @apply border-border;
+    cursor: var(--cursor-squirrel-default) 4 2, auto !important;
+  }
+
+  button,
+  a,
+  [role='button'],
+  [class*='cursor-pointer'],
+  [style*='cursor: pointer'],
+  [style*='cursor:pointer'] {
+    cursor: var(--cursor-squirrel-pointer) 5 3, pointer !important;
+  }
+
+  [class*='cursor-grab'],
+  [style*='cursor: grab'],
+  [style*='cursor:grab'] {
+    cursor: var(--cursor-squirrel-grab) 6 3, grab !important;
+  }
+
+  [class*='cursor-grabbing'],
+  [style*='cursor: grabbing'],
+  [style*='cursor:grabbing'] {
+    cursor: var(--cursor-squirrel-grabbing) 6 3, grabbing !important;
+  }
+
+  input,
+  textarea,
+  [contenteditable='true'],
+  [class*='cursor-text'],
+  [style*='cursor: text'],
+  [style*='cursor:text'] {
+    cursor: var(--cursor-squirrel-text) 8 4, text !important;
+  }
+
+  :disabled,
+  [aria-disabled='true'],
+  [class*='cursor-not-allowed'],
+  [style*='cursor: not-allowed'],
+  [style*='cursor:not-allowed'] {
+    cursor: var(--cursor-squirrel-disabled) 8 4, not-allowed !important;
+  }
+
+  .drawing-panel-cursor,
+  .drawing-panel-cursor * {
+    cursor: var(--cursor-brush-watercolor) 4 28, crosshair !important;
+  }
+
+  .drawing-panel-cursor[data-brush='watercolor'],
+  .drawing-panel-cursor[data-brush='watercolor'] * {
+    cursor: var(--cursor-brush-watercolor) 4 28, crosshair !important;
+  }
+
+  .drawing-panel-cursor[data-brush='crayon'],
+  .drawing-panel-cursor[data-brush='crayon'] * {
+    cursor: var(--cursor-brush-crayon) 4 28, crosshair !important;
+  }
+
+  .drawing-panel-cursor[data-brush='pen'],
+  .drawing-panel-cursor[data-brush='pen'] * {
+    cursor: var(--cursor-brush-pen) 4 28, crosshair !important;
+  }
+
+  .drawing-panel-cursor :disabled,
+  .drawing-panel-cursor [aria-disabled='true'] {
+    cursor: var(--cursor-squirrel-disabled) 8 4, not-allowed !important;
   }
 
   body {
@@ -69,11 +148,23 @@
     font-family: 'ZCOOL KuaiLe', cursive, sans-serif;
     overflow: hidden;
   }
+
+  canvas.drawing-brush-watercolor {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cline x1='28' y1='4' x2='13' y2='19' stroke='%23c8a060' stroke-width='3.5' stroke-linecap='round'/%3E%3Cline x1='14' y1='18' x2='9' y2='23' stroke='%23aaaaaa' stroke-width='5' stroke-linecap='round'/%3E%3Cellipse cx='6.5' cy='26' rx='4' ry='2.3' transform='rotate(-45 6.5 26)' fill='%23f987c5' opacity='0.9'/%3E%3Cellipse cx='5.5' cy='27' rx='2.6' ry='1.4' transform='rotate(-45 5.5 27)' fill='%23ffc2e0' opacity='0.72'/%3E%3C/svg%3E") 4 28, crosshair !important;
+  }
+
+  canvas.drawing-brush-crayon {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M27 5 L29 7 L13 23 L11 21 Z' fill='%23f5a62a'/%3E%3Cpath d='M27 5 L28 6 L12 22 L11 21 Z' fill='rgba(255,255,255,0.32)'/%3E%3Cpath d='M11 21 L13 23 L9 27 L7 25 Z' fill='%23ffe0a0'/%3E%3Cpath d='M7 25 L9 27 L5 30 L4 28 Z' fill='%23c8841c'/%3E%3C/svg%3E") 4 28, crosshair !important;
+  }
+
+  canvas.drawing-brush-pen {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M26 4 L29 7 L14 22 L11 19 Z' fill='%233a3a3a'/%3E%3Cpath d='M26 4 L28 5 L27 7 L24 4 Z' fill='%236688aa'/%3E%3Cpath d='M11 19 L14 22 L8 27 L5 24 Z' fill='%23cccccc'/%3E%3Cpath d='M5 24 L8 27 L5 30 Z' fill='%23222222'/%3E%3C/svg%3E") 4 28, crosshair !important;
+  }
 }
 
 @layer components {
   .font-handwriting {
-    font-family: 'Long Cang', cursive;
+    font-family: 'ZCOOL KuaiLe', cursive;
   }
 
   .font-ui {
@@ -122,6 +213,20 @@
     75% { transform: rotate(-15deg); }
   }
 
+  .wind-chime-swing {
+    animation: chime-swing 0.9s ease-in-out infinite;
+    transform-origin: 50% 0%;
+  }
+
+  @keyframes chime-swing {
+    0% { transform: rotate(0deg); }
+    20% { transform: rotate(10deg); }
+    40% { transform: rotate(-10deg); }
+    60% { transform: rotate(7deg); }
+    80% { transform: rotate(-7deg); }
+    100% { transform: rotate(0deg); }
+  }
+
   /* Tree sway */
   .tree-sway {
     animation: sway 3s ease-in-out infinite;
@@ -168,5 +273,783 @@
   .tree-grow {
     animation: tree-grow 3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
     transform-origin: bottom center;
+  }
+
+  /* Manual-tree name singing effect */
+  .cute-float {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.01em;
+  }
+
+  .cute-float-char {
+    display: inline-block;
+    animation: cute-float 1.42s ease-in-out infinite;
+    will-change: transform;
+  }
+
+  .forest-login-input {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(218, 236, 221, 0.08);
+    border-radius: 16px;
+    color: rgba(239, 249, 241, 0.96);
+    font-size: 16px;
+    line-height: 1.5;
+    padding: 13px 16px;
+    backdrop-filter: blur(6px);
+    transition: border-color 180ms ease, box-shadow 240ms ease, background-color 240ms ease, transform 200ms ease;
+  }
+
+  .forest-login-input::placeholder {
+    color: rgba(204, 223, 208, 0.62);
+  }
+
+  .forest-login-input:focus {
+    outline: none;
+    border-color: rgba(134, 247, 163, 0.22);
+    background: rgba(255, 255, 255, 0.08);
+    animation: forest-login-breathe 1.7s ease-in-out infinite;
+    transform: translateY(-1px);
+  }
+
+  .forest-login-primary {
+    border: none;
+    border-radius: 999px;
+    width: 100%;
+    min-height: 50px;
+    padding: 0 58px 0 24px;
+    color: rgba(236, 251, 240, 0.98);
+    font-size: 16px;
+    letter-spacing: 0.04em;
+    background: linear-gradient(145deg, #39b76b, #238f51);
+    box-shadow: 0 10px 24px rgba(10, 58, 27, 0.32);
+    transition: filter 180ms ease, box-shadow 180ms ease;
+  }
+
+  .forest-login-primary:hover {
+    filter: brightness(1.05);
+    box-shadow: 0 14px 28px rgba(10, 58, 27, 0.36);
+  }
+
+  .forest-login-primary:disabled {
+    background: linear-gradient(148deg, rgba(89, 106, 95, 0.76), rgba(74, 89, 80, 0.76));
+    color: rgba(214, 226, 218, 0.66);
+    box-shadow: none;
+    cursor: not-allowed;
+    filter: none;
+    opacity: 0.72;
+  }
+
+  .forest-login-switch {
+    border: none;
+    background: transparent;
+    color: rgba(208, 216, 211, 0.72);
+    font-size: 11px;
+    line-height: 1.2;
+    font-weight: 400;
+    transition: color 180ms ease;
+  }
+
+  .forest-login-switch:hover {
+    color: rgba(232, 239, 235, 0.88);
+  }
+
+  .forest-login-cancel {
+    border: none;
+    background: transparent;
+    color: rgba(208, 216, 211, 0.72);
+    font-size: 11px;
+    line-height: 1;
+    font-weight: 400;
+    transition: color 180ms ease;
+  }
+
+  .forest-login-cancel:hover {
+    color: rgba(232, 239, 235, 0.88);
+  }
+
+  .forest-login-squirrel {
+    position: absolute;
+    right: -10px;
+    top: 50%;
+    transform: translateY(-42%) rotate(-8deg);
+    font-size: 31px;
+    line-height: 1;
+    pointer-events: none;
+    filter: drop-shadow(0 4px 7px rgba(0, 0, 0, 0.22));
+  }
+
+  @keyframes cute-float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    20% {
+      transform: translateY(-2.2px);
+    }
+    40% {
+      transform: translateY(1.1px);
+    }
+    62% {
+      transform: translateY(-1.6px);
+    }
+    82% {
+      transform: translateY(0.7px);
+    }
+  }
+
+  .bgm-mushroom {
+    position: relative;
+    width: 82px;
+    height: 82px;
+    border: none;
+    padding: 0;
+    background: transparent;
+    opacity: 0.7;
+    transition: opacity 220ms ease, filter 220ms ease;
+    filter: drop-shadow(0 0 8px rgba(227, 157, 70, 0.22));
+  }
+
+  .bgm-mushroom-icon {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  .bgm-mushroom:hover,
+  .bgm-mushroom:focus-visible {
+    opacity: 0.92;
+    filter: drop-shadow(0 0 10px rgba(227, 157, 70, 0.34));
+    outline: none;
+  }
+
+  .bgm-mushroom--playing {
+    opacity: 1;
+    filter: drop-shadow(0 0 12px rgba(236, 166, 78, 0.45));
+    animation: mushroom-breathe 2.1s ease-in-out infinite;
+  }
+
+  .bgm-mushroom-cap {
+    position: absolute;
+    left: 11px;
+    top: 12px;
+    width: 50px;
+    height: 30px;
+    border-radius: 24px 24px 16px 16px;
+    background: linear-gradient(180deg, #e19f56 0%, #cb7e36 78%, #b46828 100%);
+    box-shadow: inset 0 -4px 0 rgba(78, 43, 18, 0.2);
+  }
+
+  .bgm-mushroom-spot {
+    position: absolute;
+    background: rgba(255, 230, 193, 0.8);
+    border-radius: 999px;
+  }
+
+  .bgm-mushroom-spot--1 {
+    width: 12px;
+    height: 10px;
+    left: 24px;
+    top: 21px;
+  }
+
+  .bgm-mushroom-spot--2 {
+    width: 10px;
+    height: 8px;
+    left: 39px;
+    top: 28px;
+  }
+
+  .bgm-mushroom-spot--3 {
+    width: 8px;
+    height: 7px;
+    left: 18px;
+    top: 29px;
+  }
+
+  .bgm-mushroom-stem {
+    position: absolute;
+    left: 27px;
+    top: 33px;
+    width: 18px;
+    height: 28px;
+    border-radius: 12px;
+    background: linear-gradient(180deg, #f4e5c3 0%, #dbc6a0 100%);
+    box-shadow: inset 0 -2px 0 rgba(123, 90, 52, 0.2);
+  }
+
+  .bgm-mushroom-shadow {
+    position: absolute;
+    left: 20px;
+    top: 58px;
+    width: 32px;
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(68, 43, 22, 0.24);
+    filter: blur(1px);
+  }
+
+  .bgm-tooltip {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 10px);
+    transform: translateX(-50%);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.46);
+    background: rgba(246, 251, 247, 0.34);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 8px 22px rgba(39, 58, 41, 0.2);
+    color: rgba(50, 69, 53, 0.95);
+    font-size: 12px;
+    line-height: 1;
+    padding: 8px 10px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .bgm-autoplay-hint {
+    position: absolute;
+    left: calc(100% + 10px);
+    bottom: 22px;
+    max-width: 190px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    background: rgba(245, 250, 246, 0.42);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 12px 26px rgba(38, 58, 42, 0.22);
+    color: rgba(47, 66, 51, 0.96);
+    font-size: 12px;
+    line-height: 1.35;
+    padding: 9px 11px;
+    pointer-events: none;
+    animation: bgm-hint-fade 1.4s ease-in-out infinite alternate;
+  }
+
+  .bgm-note-orbit {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 104px;
+    height: 104px;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+
+  .bgm-note-bounce {
+    position: absolute;
+    font-size: 15px;
+    line-height: 1;
+    color: rgba(255, 240, 205, 0.92);
+    text-shadow: 0 0 8px rgba(236, 184, 102, 0.4);
+    opacity: 0;
+    animation: note-bounce 1.8s ease-in-out infinite;
+  }
+
+  .bgm-note-bounce-1 {
+    left: 0;
+    top: 44px;
+    animation-delay: 0s;
+  }
+
+  .bgm-note-bounce-2 {
+    left: 18px;
+    top: 12px;
+    animation-delay: 0.22s;
+  }
+
+  .bgm-note-bounce-3 {
+    right: 14px;
+    top: 10px;
+    animation-delay: 0.48s;
+  }
+
+  .bgm-note-bounce-4 {
+    right: -2px;
+    top: 42px;
+    animation-delay: 0.74s;
+  }
+
+  .bgm-note-bounce-5 {
+    left: 42px;
+    top: -2px;
+    animation-delay: 1s;
+  }
+
+  .bgm-note-layer {
+    position: absolute;
+    left: 50%;
+    bottom: 50px;
+    width: 40px;
+    height: 58px;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+
+  .bgm-note {
+    position: absolute;
+    left: 50%;
+    font-size: 16px;
+    color: rgba(255, 241, 208, 0.86);
+    text-shadow: 0 0 6px rgba(237, 182, 110, 0.36);
+    opacity: 0;
+    animation: note-rise 2.5s ease-out infinite;
+  }
+
+  .bgm-note-1 {
+    margin-left: -16px;
+    animation-delay: 0s;
+  }
+
+  .bgm-note-2 {
+    margin-left: -2px;
+    animation-delay: 0.45s;
+  }
+
+  .bgm-note-3 {
+    margin-left: 12px;
+    animation-delay: 0.85s;
+  }
+
+  @keyframes mushroom-breathe {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.05);
+    }
+  }
+
+  @keyframes note-rise {
+    0% {
+      transform: translate(-50%, 0) scale(0.82);
+      opacity: 0;
+    }
+    20% {
+      opacity: 0.8;
+    }
+    100% {
+      transform: translate(-50%, -34px) scale(1.06);
+      opacity: 0;
+    }
+  }
+
+  @keyframes note-bounce {
+    0% {
+      transform: translateY(7px) scale(0.82);
+      opacity: 0;
+    }
+    20% {
+      opacity: 0.88;
+    }
+    50% {
+      transform: translateY(-5px) scale(1.06);
+      opacity: 1;
+    }
+    80% {
+      opacity: 0.62;
+    }
+    100% {
+      transform: translateY(-10px) scale(0.9);
+      opacity: 0;
+    }
+  }
+
+  @keyframes bgm-hint-fade {
+    0% {
+      opacity: 0.72;
+      transform: translateY(0);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(-2px);
+    }
+  }
+
+  @keyframes forest-login-breathe {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgba(120, 255, 158, 0.05), 0 8px 20px -14px rgba(120, 255, 158, 0.12);
+    }
+    50% {
+      box-shadow: 0 0 0 10px rgba(120, 255, 158, 0.08), 0 14px 28px -14px rgba(120, 255, 158, 0.28);
+    }
+  }
+
+  .summer-light-beams {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 6;
+    overflow: hidden;
+  }
+
+  .summer-light-beam {
+    position: absolute;
+    top: -28%;
+    width: clamp(140px, 14vw, 220px);
+    height: 78vh;
+    background: linear-gradient(180deg, rgba(255, 228, 145, 0.34), rgba(255, 228, 145, 0));
+    transform-origin: top center;
+    filter: blur(1px);
+    opacity: 0.7;
+    animation: summer-beam-breathe 3.6s ease-in-out infinite;
+  }
+
+  .summer-light-beam.beam-1 {
+    left: 12%;
+    transform: rotate(18deg);
+    animation-delay: 0s;
+  }
+
+  .summer-light-beam.beam-2 {
+    left: 36%;
+    transform: rotate(11deg);
+    animation-delay: 0.7s;
+  }
+
+  .summer-light-beam.beam-3 {
+    left: 62%;
+    transform: rotate(22deg);
+    animation-delay: 1.2s;
+  }
+
+  .summer-fireflies {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 34vh;
+    pointer-events: none;
+    z-index: 12;
+    overflow: hidden;
+  }
+
+  .summer-firefly {
+    position: absolute;
+    border-radius: 999px;
+    background: radial-gradient(circle at 35% 35%, rgba(255, 255, 210, 0.95), rgba(255, 236, 136, 0.72) 55%, rgba(255, 210, 95, 0) 100%);
+    box-shadow: 0 0 8px rgba(255, 224, 112, 0.55);
+    opacity: 0;
+    animation-name: summer-firefly-path, summer-firefly-breathe;
+    animation-iteration-count: infinite, infinite;
+    animation-timing-function: ease-in-out, ease-in-out;
+  }
+
+  .summer-dusk-shadow-mode [style*='box-shadow'] {
+    box-shadow: 0 18px 36px rgba(62, 30, 88, 0.42) !important;
+  }
+
+  .summer-dusk-shadow-mode .bgm-tooltip,
+  .summer-dusk-shadow-mode .forest-login-primary,
+  .summer-dusk-shadow-mode .bgm-mushroom--playing {
+    box-shadow: 0 18px 36px rgba(62, 30, 88, 0.42) !important;
+  }
+
+  .season-bird-layer {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 10;
+    overflow: hidden;
+  }
+
+  .season-bird {
+    position: absolute;
+    width: var(--bird-size, 82px);
+    height: calc(var(--bird-size, 82px) * 0.78);
+    transform-origin: center;
+    animation-timing-function: linear;
+    animation-iteration-count: 1;
+    filter: drop-shadow(0 6px 10px rgba(33, 77, 120, 0.32)) drop-shadow(0 2px 4px rgba(0,0,0,0.18));
+  }
+
+  .season-bird--ltr {
+    left: -20vw;
+    animation-name: season-bird-fly-ltr;
+  }
+
+  .season-bird--rtl {
+    left: 120vw;
+    transform: scaleX(-1);
+    animation-name: season-bird-fly-rtl;
+  }
+
+  .season-bird-svg {
+    width: 100%;
+    height: 100%;
+    animation: season-bird-flap 360ms ease-in-out infinite alternate;
+  }
+
+  .season-bird-seeds {
+    position: absolute;
+    left: 14px;
+    top: 28px;
+    width: 38px;
+    height: 18px;
+    overflow: visible;
+  }
+
+  .season-bird-seed {
+    position: absolute;
+    top: 0;
+    width: 5px;
+    height: 7px;
+    border-radius: 6px 6px 8px 8px;
+    background: radial-gradient(circle at 45% 28%, #f7dd99 0%, #d2b061 58%, #a4843f 100%);
+    opacity: 0;
+    animation: season-bird-seed-fall 1.6s ease-in 1 forwards;
+  }
+
+  .tree-perched-birds {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 13;
+  }
+
+  .tree-perched-bird {
+    position: absolute;
+    width: 34px;
+    height: 26px;
+    transform-origin: center;
+    filter: drop-shadow(0 2px 3px rgba(22, 56, 82, 0.2));
+    animation: perched-bird-bob 2.6s ease-in-out infinite;
+  }
+
+  .tree-perched-bird-svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  @keyframes summer-beam-breathe {
+    0%,
+    100% {
+      opacity: 0.36;
+    }
+    50% {
+      opacity: 0.78;
+    }
+  }
+
+  @keyframes summer-firefly-path {
+    0% {
+      transform: translate(0, 0) scale(0.8);
+    }
+    25% {
+      transform: translate(calc(var(--drift-x, 40px) * 0.35), -14px) scale(1.02);
+    }
+    50% {
+      transform: translate(var(--drift-x, 40px), -30px) scale(0.94);
+    }
+    75% {
+      transform: translate(calc(var(--drift-x, 40px) * -0.28), -16px) scale(1.06);
+    }
+    100% {
+      transform: translate(0, 0) scale(0.8);
+    }
+  }
+
+  @keyframes summer-firefly-breathe {
+    0%,
+    100% {
+      opacity: 0.18;
+      box-shadow: 0 0 4px rgba(255, 232, 133, 0.2);
+    }
+    50% {
+      opacity: 0.95;
+      box-shadow: 0 0 14px rgba(255, 238, 156, 0.66);
+    }
+  }
+
+  @keyframes season-bird-fly-ltr {
+    0% {
+      transform: translate3d(0, 0, 0) rotate(2deg);
+    }
+    35% {
+      transform: translate3d(46vw, -10px, 0) rotate(-2deg);
+    }
+    70% {
+      transform: translate3d(90vw, 6px, 0) rotate(1deg);
+    }
+    100% {
+      transform: translate3d(136vw, 0, 0) rotate(-1deg);
+    }
+  }
+
+  @keyframes season-bird-fly-rtl {
+    0% {
+      transform: scaleX(-1) translate3d(0, 0, 0) rotate(2deg);
+    }
+    35% {
+      transform: scaleX(-1) translate3d(-46vw, -10px, 0) rotate(-2deg);
+    }
+    70% {
+      transform: scaleX(-1) translate3d(-90vw, 6px, 0) rotate(1deg);
+    }
+    100% {
+      transform: scaleX(-1) translate3d(-136vw, 0, 0) rotate(-1deg);
+    }
+  }
+
+  @keyframes season-bird-flap {
+    0% {
+      transform: translateY(0) rotate(-2deg);
+    }
+    100% {
+      transform: translateY(-1px) rotate(2deg);
+    }
+  }
+
+  @keyframes season-bird-seed-fall {
+    0% {
+      opacity: 0;
+      transform: translate3d(0, 0, 0) scale(0.72);
+    }
+    10% {
+      opacity: 0.95;
+    }
+    100% {
+      opacity: 0;
+      transform: translate3d(calc((var(--seed-drift, 6px)) * -1), 94px, 0) scale(1.02);
+    }
+  }
+
+  @keyframes perched-bird-bob {
+    0%,
+    100% {
+      margin-top: 0;
+    }
+    50% {
+      margin-top: -1.5px;
+    }
+  }
+
+  .winter-snowing-layer {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 7;
+    overflow: hidden;
+  }
+
+  .winter-snowflake {
+    position: absolute;
+    top: -5%;
+    border-radius: 999px;
+    background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.96), rgba(232, 243, 255, 0.84) 60%, rgba(232, 243, 255, 0.18) 100%);
+    box-shadow: 0 0 8px rgba(223, 238, 255, 0.34);
+    animation: winter-snow-fall linear infinite;
+  }
+
+  .winter-snowbank {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 126px;
+    z-index: 34;
+    pointer-events: none;
+    overflow: hidden;
+    background: transparent;
+    border-top: none;
+  }
+
+  .winter-snowbank-back,
+  .winter-snowbank-top,
+  .winter-snowbank-front {
+    position: absolute;
+    left: -12%;
+    width: 124%;
+    min-width: 124vw;
+    object-fit: cover;
+    object-position: top;
+  }
+
+  .winter-snowbank-back {
+    top: 8px;
+    height: 50px;
+    opacity: 0.44;
+    filter: saturate(0.9) brightness(1.02);
+    animation: winter-snowbank-back-drift 22s ease-in-out infinite alternate;
+  }
+
+  .winter-snowbank-top {
+    bottom: 26px;
+    height: 68px;
+    opacity: 0.8;
+    animation: winter-snowbank-top-drift 14s ease-in-out infinite alternate;
+  }
+
+  .winter-snowbank-front {
+    bottom: 0;
+    height: 78px;
+    opacity: 0.97;
+    filter: drop-shadow(0 -4px 10px rgba(255, 255, 255, 0.28));
+    animation: winter-snowbank-front-drift 11s ease-in-out infinite alternate;
+  }
+
+  @media (max-width: 720px) {
+    .winter-snowbank {
+      height: 102px;
+    }
+
+    .winter-snowbank-back {
+      top: 6px;
+      height: 36px;
+    }
+
+    .winter-snowbank-top {
+      bottom: 21px;
+      height: 50px;
+    }
+
+    .winter-snowbank-front {
+      height: 62px;
+    }
+  }
+
+  @keyframes winter-snow-fall {
+    0% {
+      transform: translate3d(0, -8vh, 0);
+    }
+    35% {
+      transform: translate3d(calc(var(--snow-drift, 50px) * 0.46), 36vh, 0);
+    }
+    70% {
+      transform: translate3d(var(--snow-drift, 50px), 74vh, 0);
+    }
+    100% {
+      transform: translate3d(calc(var(--snow-drift, 50px) * 0.22), 110vh, 0);
+    }
+  }
+
+  @keyframes winter-snowbank-back-drift {
+    0% {
+      transform: translateX(-10px);
+    }
+    100% {
+      transform: translateX(10px);
+    }
+  }
+
+  @keyframes winter-snowbank-top-drift {
+    0% {
+      transform: translateX(-6px);
+    }
+    100% {
+      transform: translateX(6px);
+    }
+  }
+
+  @keyframes winter-snowbank-front-drift {
+    0% {
+      transform: translateX(-4px);
+    }
+    100% {
+      transform: translateX(4px);
+    }
   }
 }
