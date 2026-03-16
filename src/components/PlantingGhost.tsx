@@ -17,7 +17,6 @@ export default function PlantingGhost({ imageData, mouseX, mouseY, onPlace, minY
     <div
       className="fixed inset-0 z-20 cursor-pointer"
       onClick={() => onPlace(mouseX, depth.clampedY)}
-      style={{ cursor: 'none' }}
     >
       {/* Hint text */}
       <motion.div

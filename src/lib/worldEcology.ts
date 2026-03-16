@@ -100,8 +100,8 @@ const WORLD_ECOLOGY_ATMOSPHERE: Record<WorldEcologyZone['id'], WorldEcologyAtmos
     mountainTint: 'rgba(80, 132, 128, 0.16)',
     hillTint: 'rgba(70, 132, 110, 0.14)',
     grassTint: 'rgba(88, 148, 120, 0.12)',
-    rainTint: 'rgba(96, 128, 144, 0.08)',
-    particleHues: [132, 152, 176],
+    rainTint: 'rgba(118, 142, 162, 0.08)',
+    particleHues: [332, 342, 350],
     fireflyHue: 160,
   },
   'mixed-meadow': {
@@ -110,8 +110,8 @@ const WORLD_ECOLOGY_ATMOSPHERE: Record<WorldEcologyZone['id'], WorldEcologyAtmos
     mountainTint: 'rgba(152, 168, 110, 0.14)',
     hillTint: 'rgba(120, 160, 102, 0.12)',
     grassTint: 'rgba(168, 186, 102, 0.12)',
-    rainTint: 'rgba(130, 140, 118, 0.06)',
-    particleHues: [58, 84, 112],
+    rainTint: 'rgba(118, 142, 162, 0.08)',
+    particleHues: [332, 342, 350],
     fireflyHue: 64,
   },
   'blossom-glow': {
@@ -120,8 +120,8 @@ const WORLD_ECOLOGY_ATMOSPHERE: Record<WorldEcologyZone['id'], WorldEcologyAtmos
     mountainTint: 'rgba(214, 154, 136, 0.16)',
     hillTint: 'rgba(196, 132, 112, 0.14)',
     grassTint: 'rgba(214, 162, 118, 0.12)',
-    rainTint: 'rgba(152, 126, 136, 0.07)',
-    particleHues: [332, 346, 18],
+    rainTint: 'rgba(118, 142, 162, 0.08)',
+    particleHues: [332, 342, 350],
     fireflyHue: 28,
   },
 };

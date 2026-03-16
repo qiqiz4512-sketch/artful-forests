@@ -72,4 +72,34 @@ To connect a domain, navigate to Project > Settings > Domains and click Connect 
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
 
-xxxx
+## Supabase Auth integration
+
+This project now supports authentication with:
+
+- Email + password login
+- Username + password login
+
+### 1) Configure env vars
+
+Create a `.env` file in the project root (or copy `.env.example`):
+
+```bash
+VITE_SUPABASE_URL=https://giooyiclaivgxmedfljk.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+```
+
+### 2) Initialize Supabase SQL
+
+Run the SQL in `supabase/auth_setup.sql` inside your Supabase SQL Editor.
+
+### 3) Make sure email auth is enabled
+
+In Supabase Dashboard:
+
+- Authentication -> Providers -> Email: enabled
+- If you require email confirmation, new registrations must verify email before first login.
+
+### Notes
+
+- Registration flow creates/updates a row in `public.profiles`.
+- Username login resolves email from `public.profiles` before calling Supabase password login.

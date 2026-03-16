@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import type { User } from '@supabase/supabase-js';
 import type { WeatherType } from '@/components/Particles';
 import { useTimeTheme, type TimeMode } from '@/hooks/useTimeTheme';
 import ParallaxBackground from '@/components/ParallaxBackground';
@@ -7,12 +8,16 @@ import Particles from '@/components/Particles';
 import SeedButton from '@/components/SeedButton';
 import DrawingPanel from '@/components/DrawingPanel';
 import WindChime from '@/components/WindChime';
+import SummerTemporalEffects from '@/components/SummerTemporalEffects';
+import WinterSeasonEffects from '@/components/WinterSeasonEffects';
 import PlantedTree from '@/components/PlantedTree';
 import PlantingGhost from '@/components/PlantingGhost';
 import AgentLink from '@/components/AgentLink';
 import ChatPanel from '@/components/ChatPanel';
+import BgmMushroom from '@/components/BgmMushroom';
 import TreeSpeciesPanel from '@/components/TreeSpeciesPanel';
 import CelestialCelebration from '@/components/CelestialCelebration';
+import ForestLoginModal, { type ForestAuthMode } from '@/components/ForestLoginModal';
 import { getTreeDepthMetrics } from '@/lib/treeDepth';
 import { useForestStore } from '@/stores/useForestStore';
 import { ChatHistoryEntry, SceneTreeSnapshot } from '@/types/forest';
@@ -21,6 +26,7 @@ import { useForestEcology } from '@/hooks/useForestEcology';
 import { useAutoPlanting, renderTreeShapeToDataUrl } from '@/hooks/useAutoPlanting';
 import { generateRandomProfile } from '@/lib/agentProfile';
 import { generateClusteredTrees } from '@/lib/forestClusters';
+import { supabase } from '@/lib/supabase';
 import { getWorldEcologyAtmosphere, getWorldEcologyZone, pickShapeByWorldEcology } from '@/lib/worldEcology';
 
 interface TreeData {
@@ -42,6 +48,16 @@ const WORLD_EDGE_HINT_DISTANCE = 420;
 const USER_IDLE_THRESHOLD_MS = 120000;
 const GUARDIAN_MESSAGE_COOLDOWN_MS = 180000;
 const GUARDIAN_MESSAGE = '我一直在看着这片森林，也在等你。';
+const FOREST_BGM_AUDIO_URL = '/assets/forest-bgm.mp3';
+const FOREST_BGM_ICON_URL = '/assets/bgm-mushroom.png';
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME_PATTERN = /^[\p{L}\p{N}_-]{2,24}$/u;
+
+interface ProfileRow {
+  id: string;
+  username: string | null;
+  email: string | null;
+}
 
 type SeasonMode = 'spring' | 'summer' | 'autumn' | 'winter' | 'auto';
 
@@ -152,6 +168,16 @@ function createLegacySampleTreeImage(index: number): string {
 }
 
 export default function Index() {
+  const [username, setUsername] = useState<string | null>(null);
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<ForestAuthMode>('register');
+  const [identifierInput, setIdentifierInput] = useState('');
+  const [emailInput, setEmailInput] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [loginErrorPulse, setLoginErrorPulse] = useState(0);
+  const [loginPulse, setLoginPulse] = useState(0);
   const [season, setSeason] = useState<SeasonMode>('auto');
   const [timeMode, setTimeMode] = useState<TimeMode>('auto');
   const { theme, colors } = useTimeTheme(timeMode);
@@ -179,17 +205,24 @@ export default function Index() {
   const [seedDrift, setSeedDrift] = useState<{ id: string; glyph: '🍃' | '🪶'; fromY: number; toY: number } | null>(null);
   const [celestialEffect, setCelestialEffect] = useState<'meteor' | 'aurora' | null>(null);
   const [treeNotice, setTreeNotice] = useState<{ id: string; text: string; sub: string; emoji: string; treeId?: string } | null>(null);
+  const [authCelebration, setAuthCelebration] = useState<{ id: string; title: string; sub: string; emoji: string } | null>(null);
   const resolvedSeason = resolveSeason(season);
-  const treeLayerFilter = seasonLayerFilterMap[resolvedSeason];
+  const isSummerDawn = resolvedSeason === 'summer' && theme === 'dawn';
+  const isSummerDusk = resolvedSeason === 'summer' && theme === 'dusk';
+  const isSpringSeason = resolvedSeason === 'spring';
+  const isWinterSeason = resolvedSeason === 'winter';
+  const treeLayerFilter = `${seasonLayerFilterMap[resolvedSeason]} ${isSummerDawn ? 'drop-shadow(0 0 8px rgba(255, 232, 168, 0.56)) drop-shadow(0 0 20px rgba(255, 239, 200, 0.4))' : ''} ${isWinterSeason ? 'brightness(0.95) saturate(0.82) hue-rotate(6deg)' : ''}`.trim();
   const containerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
   const dragStart = useRef(0);
   const scrollStart = useRef(0);
   const scrollXRef = useRef(0);
   const focusAnimRef = useRef<number | null>(null);
-  const treeNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const treeNoticeTimerRef = useRef<number | null>(null);
+  const authCelebrationTimerRef = useRef<number | null>(null);
   const lastUserActionAtRef = useRef(Date.now());
   const lastGuardianMessageAtRef = useRef(0);
+  const prevResolvedSeasonRef = useRef<Exclude<SeasonMode, 'auto'> | null>(null);
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1000;
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
   const worldWidth = Math.max(WORLD_WIDTH_MIN, viewportWidth * WORLD_WIDTH_MULTIPLIER);
@@ -220,6 +253,282 @@ export default function Index() {
       treeNoticeTimerRef.current = null;
     }, durationMs);
   }, []);
+
+  const showAuthCelebration = useCallback((title: string, sub: string, emoji: string, durationMs = 2400) => {
+    if (authCelebrationTimerRef.current !== null) {
+      window.clearTimeout(authCelebrationTimerRef.current);
+    }
+    setAuthCelebration({ id: `${Date.now()}`, title, sub, emoji });
+    authCelebrationTimerRef.current = window.setTimeout(() => {
+      setAuthCelebration(null);
+      authCelebrationTimerRef.current = null;
+    }, durationMs);
+  }, []);
+
+  const resolveProfileLabel = useCallback(async (user: User | null): Promise<string | null> => {
+    if (!user) return null;
+
+    const { data } = await supabase
+      .from('profiles')
+      .select('username,email')
+      .eq('id', user.id)
+      .maybeSingle<Pick<ProfileRow, 'username' | 'email'>>();
+
+    const profileUsername = data?.username?.trim();
+    if (profileUsername) return profileUsername;
+
+    const metadataUsername = typeof user.user_metadata?.username === 'string' ? user.user_metadata.username.trim() : '';
+    if (metadataUsername) return metadataUsername;
+
+    return user.email ?? null;
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+
+    const syncUser = async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!active) return;
+      const label = await resolveProfileLabel(data.session?.user ?? null);
+      if (!active) return;
+      setUsername(label);
+    };
+
+    void syncUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      void (async () => {
+        const label = await resolveProfileLabel(session?.user ?? null);
+        if (!active) return;
+        setUsername(label);
+      })();
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, [resolveProfileLabel]);
+
+  const handleLoginEntry = useCallback(async (): Promise<'login-success' | 'logout' | 'noop'> => {
+    if (authSubmitting) return 'noop';
+
+    if (username) {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        setLoginError(error.message);
+        setLoginErrorPulse((prev) => prev + 1);
+        return 'noop';
+      }
+      setUsername(null);
+      showTreeNotice('已退出登录', '你的森林身份已暂时离线', '👋', 2200);
+      return 'logout';
+    }
+
+    setAuthMode('login');
+    setIdentifierInput('');
+    setEmailInput('');
+    setPasswordInput('');
+    setLoginError('');
+    setLoginModalOpen(true);
+    return 'noop';
+  }, [authSubmitting, showTreeNotice, username]);
+
+  const handleSubmitAuth = useCallback(async () => {
+    const trimmedIdentifier = identifierInput.trim();
+    const trimmedEmail = emailInput.trim().toLowerCase();
+    const trimmedPassword = passwordInput.trim();
+
+    if (!trimmedIdentifier) {
+      setLoginError(authMode === 'register' ? '请先设置用户名' : '请先输入邮箱或用户名');
+      setLoginErrorPulse((prev) => prev + 1);
+      return;
+    }
+
+    if (!trimmedPassword) {
+      setLoginError('请先输入密码');
+      setLoginErrorPulse((prev) => prev + 1);
+      return;
+    }
+
+    if (trimmedPassword.length < 6) {
+      setLoginError('密码至少需要 6 位');
+      setLoginErrorPulse((prev) => prev + 1);
+      return;
+    }
+
+    setAuthSubmitting(true);
+    setLoginError('');
+
+    try {
+      if (authMode === 'register') {
+        if (!USERNAME_PATTERN.test(trimmedIdentifier)) {
+          setLoginError('用户名需 2-24 位，可用字母、数字、下划线或短横线');
+          setLoginErrorPulse((prev) => prev + 1);
+          return;
+        }
+
+        if (!EMAIL_PATTERN.test(trimmedEmail)) {
+          setLoginError('请输入有效邮箱');
+          setLoginErrorPulse((prev) => prev + 1);
+          return;
+        }
+
+        const { data: existingProfile } = await supabase
+          .from('profiles')
+          .select('id')
+          .ilike('username', trimmedIdentifier)
+          .maybeSingle<Pick<ProfileRow, 'id'>>();
+
+        if (existingProfile) {
+          setLoginError('该用户名已被使用，请换一个');
+          setLoginErrorPulse((prev) => prev + 1);
+          return;
+        }
+
+        const { data, error } = await supabase.auth.signUp({
+          email: trimmedEmail,
+          password: trimmedPassword,
+          options: {
+            data: { username: trimmedIdentifier },
+          },
+        });
+
+        if (error) {
+          setLoginError(error.message);
+          setLoginErrorPulse((prev) => prev + 1);
+          return;
+        }
+
+        if (data.user) {
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .upsert({
+              id: data.user.id,
+              username: trimmedIdentifier,
+              email: trimmedEmail,
+            }, { onConflict: 'id' });
+
+          if (profileError) {
+            setLoginError(`账号已创建，但资料写入失败：${profileError.message}`);
+            setLoginErrorPulse((prev) => prev + 1);
+            return;
+          }
+        }
+
+        setIdentifierInput('');
+        setEmailInput('');
+        setPasswordInput('');
+        setAuthMode('login');
+
+        if (!data.session) {
+          setLoginModalOpen(false);
+          showTreeNotice('注册成功', '请前往邮箱确认后再登录', '📮', 3200);
+          showAuthCelebration('注册完成', '已发送确认邮件，请完成验证', '🌿');
+          return;
+        }
+
+        setUsername(trimmedIdentifier);
+        setLoginPulse((prev) => prev + 1);
+        setLoginModalOpen(false);
+        showTreeNotice(`注册成功，${trimmedIdentifier}`, '森林通行证已激活', '🌲', 2800);
+        showAuthCelebration('注册完成', `${trimmedIdentifier}，你的森林身份已创建`, '🌿');
+        return;
+      }
+
+      const isEmailLogin = EMAIL_PATTERN.test(trimmedIdentifier);
+      let resolvedEmail = trimmedIdentifier.toLowerCase();
+
+      if (!isEmailLogin) {
+        const { data: profileByUsername, error: usernameLookupError } = await supabase
+          .from('profiles')
+          .select('email,username')
+          .ilike('username', trimmedIdentifier)
+          .maybeSingle<Pick<ProfileRow, 'email' | 'username'>>();
+
+        if (usernameLookupError) {
+          setLoginError(usernameLookupError.message);
+          setLoginErrorPulse((prev) => prev + 1);
+          return;
+        }
+
+        if (!profileByUsername?.email) {
+          setLoginError('未找到该用户名，请检查后重试');
+          setLoginErrorPulse((prev) => prev + 1);
+          return;
+        }
+
+        resolvedEmail = profileByUsername.email;
+      }
+
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email: resolvedEmail,
+        password: trimmedPassword,
+      });
+
+      if (signInError) {
+        setLoginError(signInError.message);
+        setLoginErrorPulse((prev) => prev + 1);
+        return;
+      }
+
+      const profileLabel = await resolveProfileLabel(signInData.user);
+      const finalName = profileLabel ?? signInData.user.email ?? '森林旅人';
+      setUsername(finalName);
+      setIdentifierInput('');
+      setEmailInput('');
+      setPasswordInput('');
+      setLoginPulse((prev) => prev + 1);
+      setLoginModalOpen(false);
+      showTreeNotice(`欢迎回来，${finalName}`, '登录入口已在右上角激活', '🎐', 2600);
+      showAuthCelebration('通行证已激活', `${finalName}，欢迎回到森林`, '🎫');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }, [authMode, emailInput, identifierInput, passwordInput, resolveProfileLabel, showAuthCelebration, showTreeNotice]);
+
+  const handleCancelLogin = useCallback(() => {
+    setLoginModalOpen(false);
+    setIdentifierInput('');
+    setEmailInput('');
+    setPasswordInput('');
+    setLoginError('');
+  }, []);
+
+  const handleIdentifierChange = useCallback((value: string) => {
+    setIdentifierInput(value);
+    if (loginError) {
+      setLoginError('');
+    }
+  }, [loginError]);
+
+  const handleEmailChange = useCallback((value: string) => {
+    setEmailInput(value);
+    if (loginError) {
+      setLoginError('');
+    }
+  }, [loginError]);
+
+  const handlePasswordChange = useCallback((value: string) => {
+    setPasswordInput(value);
+    if (loginError) {
+      setLoginError('');
+    }
+  }, [loginError]);
+
+  const handleSwitchAuthMode = useCallback((mode: ForestAuthMode) => {
+    setAuthMode(mode);
+    setLoginError('');
+    setIdentifierInput('');
+    setEmailInput('');
+    setPasswordInput('');
+  }, []);
+
+  const canSubmitAuth = authMode === 'register'
+    ? USERNAME_PATTERN.test(identifierInput.trim()) && EMAIL_PATTERN.test(emailInput.trim().toLowerCase()) && passwordInput.trim().length >= 6
+    : identifierInput.trim().length >= 2 && passwordInput.trim().length >= 6;
 
   const {
     isAutoPlanting,
@@ -290,6 +599,14 @@ export default function Index() {
   }, [setConversationWeather, theme, weather]);
 
   useEffect(() => {
+    const previousSeason = prevResolvedSeasonRef.current;
+    if (resolvedSeason === 'winter' && previousSeason !== 'winter') {
+      setWeather('snow');
+    }
+    prevResolvedSeasonRef.current = resolvedSeason;
+  }, [resolvedSeason]);
+
+  useEffect(() => {
     scrollXRef.current = scrollX;
   }, [scrollX]);
 
@@ -300,6 +617,9 @@ export default function Index() {
       }
       if (treeNoticeTimerRef.current !== null) {
         window.clearTimeout(treeNoticeTimerRef.current);
+      }
+      if (authCelebrationTimerRef.current !== null) {
+        window.clearTimeout(authCelebrationTimerRef.current);
       }
     };
   }, []);
@@ -672,7 +992,7 @@ export default function Index() {
   return (
     <div
       ref={containerRef}
-      className="fixed inset-0 overflow-hidden select-none"
+      className={`fixed inset-0 overflow-hidden select-none ${resolvedSeason === 'summer' ? `summer-mode summer-${theme}-mode` : ''} ${isSummerDusk ? 'summer-dusk-shadow-mode' : ''} ${isWinterSeason ? `winter-mode winter-${theme}-mode` : ''}`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -682,6 +1002,9 @@ export default function Index() {
     >
       {/* Watercolor wash entry */}
       <div className="watercolor-wash fixed inset-0" style={{ zIndex: -1 }} />
+
+      <SummerTemporalEffects season={resolvedSeason} theme={theme} />
+      <WinterSeasonEffects season={resolvedSeason} weather={weather} />
 
       {/* World edge hints */}
       <AnimatePresence>
@@ -881,6 +1204,8 @@ export default function Index() {
         <ParallaxBackground
           theme={theme}
           colors={colors}
+          season={resolvedSeason}
+          weather={weather}
           scrollX={scrollX}
           cameraZoom={cameraZoom}
           atmosphere={activeEcologyAtmosphere}
@@ -905,6 +1230,7 @@ export default function Index() {
                 x={tree.x}
                 y={tree.y}
                 size={tree.size}
+                season={resolvedSeason}
                 isNew={tree.id === newTreeId}
                 growthMode={tree.id === newTreeId ? tree.spawnType : 'ambient'}
                 minY={minPlantY}
@@ -916,13 +1242,24 @@ export default function Index() {
             );
           })}
 
-          <AgentLink agents={agents} />
+          <AgentLink
+            agents={agents}
+            sceneTrees={visibleTrees.map((tree) => ({
+              id: tree.id,
+              x: tree.x,
+              y: tree.y,
+              size: tree.size,
+              scale: 1,
+              zIndex: 0,
+            }))}
+          />
         </div>
 
         {/* Particles */}
         <Particles
           colors={colors}
           weather={weather}
+          season={resolvedSeason}
           emissionRateMultiplier={emissionRateMultiplier}
           atmosphere={activeEcologyAtmosphere}
         />
@@ -1208,14 +1545,73 @@ export default function Index() {
         onFocusTree={focusTreeById}
       />
 
+      <BgmMushroom
+        audioUrl={FOREST_BGM_AUDIO_URL}
+        iconUrl={FOREST_BGM_ICON_URL}
+        variant={isWinterSeason ? 'winter' : 'default'}
+        enableSpringBirds={isSpringSeason}
+        autoPlay
+      />
+
       <TreeSpeciesPanel
         agents={agents}
         visibleTreeIds={visibleTreeIds}
         activeZoneLabel={activeEcologyZone.label}
       />
 
+      <AnimatePresence>
+        {authCelebration && (
+          <motion.div
+            key={authCelebration.id}
+            initial={{ opacity: 0, scale: 0.76, y: -24 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.92, y: -16 }}
+            transition={{ duration: 0.32, ease: [0.2, 0.9, 0.2, 1] }}
+            className="fixed top-16 left-1/2 -translate-x-1/2 pointer-events-none z-[110]"
+          >
+            <div
+              style={{
+                borderRadius: 18,
+                background: 'linear-gradient(145deg, rgba(246, 255, 248, 0.86), rgba(237, 252, 241, 0.92))',
+                border: '1px solid rgba(133, 176, 142, 0.5)',
+                boxShadow: '0 10px 28px rgba(18, 58, 27, 0.2)',
+                backdropFilter: 'blur(9px)',
+                padding: '10px 16px 11px',
+                minWidth: 220,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 20, lineHeight: 1 }}>{authCelebration.emoji}</span>
+                <span style={{ fontSize: 16, color: 'hsl(136, 30%, 24%)' }}>{authCelebration.title}</span>
+              </div>
+              <div style={{ marginTop: 4, fontSize: 12, color: 'rgba(37, 76, 45, 0.76)' }}>
+                {authCelebration.sub}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <ForestLoginModal
+        open={loginModalOpen}
+        mode={authMode}
+        identifier={identifierInput}
+        email={emailInput}
+        password={passwordInput}
+        isSubmitting={authSubmitting}
+        errorMessage={loginError}
+        errorPulse={loginErrorPulse}
+        canSubmit={canSubmitAuth}
+        onIdentifierChange={handleIdentifierChange}
+        onEmailChange={handleEmailChange}
+        onPasswordChange={handlePasswordChange}
+        onSubmit={handleSubmitAuth}
+        onSwitchMode={handleSwitchAuthMode}
+        onCancel={handleCancelLogin}
+      />
+
       {/* Wind Chime */}
-      <WindChime />
+      <WindChime username={username} onAuthAction={handleLoginEntry} loginPulse={loginPulse} />
 
       {/* Seed Button */}
       <SeedButton onClick={() => setDrawingOpen(!drawingOpen)} isOpen={drawingOpen} />

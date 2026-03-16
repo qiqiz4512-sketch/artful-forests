@@ -12,6 +12,7 @@ interface Props {
   x: number;
   y: number;
   size: number;
+  season?: 'spring' | 'summer' | 'autumn' | 'winter';
   isNew?: boolean;
   growthMode?: 'manual' | 'auto' | 'ambient';
   minY: number;
@@ -210,7 +211,7 @@ const pickUserNudgeLine = (personality?: string, isManual?: boolean) => {
   return randomIn([...specific, ...USER_NUDGE_LINES_COMMON]);
 };
 
-export default function PlantedTree({ imageData, x, y, size, isNew, growthMode = 'ambient', minY, maxY, agentId, profile, highlighted = false }: Props) {
+export default function PlantedTree({ imageData, x, y, size, season = 'spring', isNew, growthMode = 'ambient', minY, maxY, agentId, profile, highlighted = false }: Props) {
   const [isHovered, setIsHovered] = useState(false);
   const [hasGrown, setHasGrown] = useState(false);
   const [userNudgeLines, setUserNudgeLines] = useState<string[]>([]);
@@ -227,7 +228,6 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
   const entryInitialOpacity = isAutoGrowth ? 0.16 : 0;
   const growthSpring = getGrowthSpring(profile?.shape?.id);
   const agents = useForestStore((state) => state.agents);
-  const activeChat = useForestStore((state) => state.activeChat);
   const partnerId = profile?.socialCircle?.partner;
   const partner = agents.find((agent) => agent.id === partnerId);
   const partnerIntimacy = partnerId ? profile?.intimacyMap?.[partnerId] ?? 0 : 0;
@@ -248,24 +248,7 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
       : 0;
   const hasSyncAffinity = Boolean(partner && towardPartnerX !== 0);
   const effectiveHovered = isHovered;
-  const isSpeaker = Boolean(agentId && activeChat?.treeAId === agentId);
-  const isListener = Boolean(agentId && activeChat?.treeBId === agentId);
   const DIALOGUE_LINE_CHARS = 6;
-  const dialogueSnippet = isSpeaker && activeChat
-    ? (() => {
-        const msg = activeChat.message;
-        const m = msg.match(/^([^\u3002\uff01\uff1f]{2,16}[\u3002\uff01\uff1f]?)/);
-        return m ? m[1] : (msg.length > 16 ? msg.slice(0, 16) + '\u2026' : msg);
-      })()
-    : '';
-  const dialogueBubbleText = dialogueSnippet
-    ? (() => {
-        const chunks = dialogueSnippet.match(new RegExp(`.{1,${DIALOGUE_LINE_CHARS}}`, 'g')) ?? [dialogueSnippet];
-        return chunks
-          .map((chunk) => chunk.padEnd(DIALOGUE_LINE_CHARS, '\u3000'))
-          .join('\n');
-      })()
-    : '';
   const userNudgeBubbleText = userNudgeLines.length > 0
     ? userNudgeLines
       .map((line) => {
@@ -277,7 +260,7 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
       })
       .join('\n')
     : '';
-  const hasActiveBubble = userNudgeLines.length > 0 || isSpeaker || isListener;
+  const hasActiveBubble = userNudgeLines.length > 0;
 
   const idleAnim = getIdleAnim(profile?.personality, profile?.shape?.id);
 
@@ -564,12 +547,13 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
                   fontSize: 12,
                   lineHeight: 1.52,
                   letterSpacing: '0.03em',
-                  background: 'linear-gradient(160deg, rgba(255, 248, 246, 0.98) 0%, rgba(255, 241, 245, 0.95) 100%)',
+                  background: 'rgba(252, 255, 253, 0.6)',
                   padding: '6px 11px',
-                  borderRadius: '16px 16px 16px 8px',
-                  boxShadow: '0 6px 16px rgba(120, 92, 108, 0.16), 0 1px 0 rgba(255,255,255,0.5) inset',
+                  borderRadius: '18px',
+                  boxShadow: '0 8px 18px rgba(86, 112, 98, 0.16), 0 1px 0 rgba(255,255,255,0.56) inset',
                   color: 'hsl(152, 30%, 24%)',
-                  border: '1px solid rgba(214, 170, 188, 0.42)',
+                  border: '1px solid rgba(186, 206, 194, 0.52)',
+                  backdropFilter: 'blur(4px)',
                   whiteSpace: 'pre',
                   position: 'relative',
                 }}
@@ -578,14 +562,14 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
                 <div
                   style={{
                     position: 'absolute',
-                    left: -5,
-                    top: '72%',
+                    left: -6,
+                    top: '74%',
                     transform: 'translateY(-50%) rotate(45deg)',
-                    width: 10,
-                    height: 10,
-                    background: 'rgba(255, 241, 245, 0.96)',
-                    borderLeft: '1px solid rgba(214, 170, 188, 0.42)',
-                    borderBottom: '1px solid rgba(214, 170, 188, 0.42)',
+                    width: 12,
+                    height: 12,
+                    background: 'rgba(252, 255, 253, 0.6)',
+                    borderLeft: '1px solid rgba(186, 206, 194, 0.52)',
+                    borderBottom: '1px solid rgba(186, 206, 194, 0.52)',
                   }}
                 />
               </div>
@@ -593,106 +577,6 @@ export default function PlantedTree({ imageData, x, y, size, isNew, growthMode =
           )}
         </AnimatePresence>
 
-        {/* A2A 对话气泡 — 说话方（右上方） */}
-        <AnimatePresence>
-          {isSpeaker && userNudgeLines.length === 0 && (
-            <motion.div
-              key={'speech-' + agentId}
-              initial={{ opacity: 0, x: 8, y: 4, scale: 0.9 }}
-              animate={{ opacity: 1, x: 0, y: [0, -1, 0], scale: [1, 1.03, 1] }}
-              exit={{ opacity: 0, x: 5, y: 2, scale: 0.92 }}
-              transition={{
-                opacity: { duration: 0.16, ease: 'easeOut' },
-                x: { type: 'spring', stiffness: 280, damping: 24 },
-                y: { duration: 1.9, repeat: Infinity, ease: 'easeInOut' },
-                scale: { duration: 0.24, ease: 'easeOut' },
-              }}
-              className="absolute pointer-events-none"
-              style={{
-                top: '-4%',
-                left: '102%',
-                transform: `scale(${depth.phraseCompensationScale.toFixed(2)})`,
-                transformOrigin: 'left bottom',
-                zIndex: 25,
-              }}
-            >
-              <div
-                style={{
-                  minWidth: 102,
-                  maxWidth: 148,
-                  fontFamily: "'ZCOOL KuaiLe', cursive",
-                  fontSize: 12,
-                  lineHeight: 1.52,
-                  letterSpacing: '0.03em',
-                  background: 'linear-gradient(160deg, rgba(255, 253, 249, 0.98) 0%, rgba(241, 255, 245, 0.95) 100%)',
-                  backdropFilter: 'blur(2px)',
-                  padding: '6px 11px',
-                  borderRadius: '16px 16px 16px 8px',
-                  boxShadow: '0 6px 16px rgba(88, 110, 96, 0.16), 0 1px 0 rgba(255,255,255,0.5) inset',
-                  color: 'hsl(152, 30%, 24%)',
-                  border: '1px solid rgba(159, 193, 171, 0.36)',
-                  width: `${DIALOGUE_LINE_CHARS}em`,
-                  whiteSpace: 'pre',
-                  position: 'relative',
-                }}
-              >
-                {dialogueBubbleText}
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: -5,
-                    top: '72%',
-                    transform: 'translateY(-50%) rotate(45deg)',
-                    width: 10,
-                    height: 10,
-                    background: 'rgba(248, 255, 246, 0.96)',
-                    borderLeft: '1px solid rgba(159, 193, 171, 0.36)',
-                    borderBottom: '1px solid rgba(159, 193, 171, 0.36)',
-                  }}
-                />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* A2A 对话气泡 — 倾听方（右侧） */}
-        <AnimatePresence>
-          {isListener && !isSpeaker && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute pointer-events-none"
-              style={{
-                top: '14%',
-                left: '104%',
-                transform: `scale(${depth.phraseCompensationScale.toFixed(2)})`,
-                transformOrigin: 'left center',
-                zIndex: 24,
-              }}
-            >
-              <motion.div
-                animate={{ opacity: [0.42, 0.9, 0.42], y: [0, -1, 0] }}
-                transition={{ duration: 1.25, repeat: Infinity, ease: 'easeInOut' }}
-                style={{
-                  fontFamily: "'ZCOOL KuaiLe', cursive",
-                  fontSize: 13,
-                  color: 'hsl(152, 26%, 42%)',
-                  letterSpacing: '0.16em',
-                  userSelect: 'none',
-                  lineHeight: 1,
-                  background: 'rgba(249, 255, 249, 0.82)',
-                  border: '1px solid rgba(156, 190, 168, 0.33)',
-                  borderRadius: 999,
-                  padding: '4px 8px',
-                  boxShadow: '0 3px 10px rgba(88, 110, 96, 0.12)',
-                }}
-              >
-                ···
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </motion.div>
     </div>
   );

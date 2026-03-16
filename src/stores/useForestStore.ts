@@ -101,6 +101,13 @@ const createHistoryEntry = (
   isTrending: input.isTrending,
 });
 
+const isSameDialogueEntry = (a: ChatHistoryEntry, b: ChatHistoryEntry): boolean => (
+  a.speakerId === b.speakerId
+  && a.listenerId === b.listenerId
+  && a.message === b.message
+  && Math.abs(a.createdAt - b.createdAt) <= 2500
+);
+
 const withNeighbors = (agents: TreeAgent[], radius = 200): TreeAgent[] => {
   const worldWidth = inferWorldWidthFromPositions(agents.map((agent) => agent.position.x));
   return agents.map((agent) => {
@@ -450,9 +457,24 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
   },
   addChatHistoryEntry: (entry) => {
     const next = createHistoryEntry(entry);
-    set((state) => ({
-      chatHistory: [...state.chatHistory, next].slice(-CHAT_HISTORY_LIMIT),
-    }));
+    set((state) => {
+      const last = state.chatHistory[state.chatHistory.length - 1];
+      if (last && isSameDialogueEntry(last, next)) {
+        const merged: ChatHistoryEntry = {
+          ...last,
+          ...next,
+          id: last.id,
+          createdAt: last.createdAt,
+        };
+        return {
+          chatHistory: [...state.chatHistory.slice(0, -1), merged].slice(-CHAT_HISTORY_LIMIT),
+        };
+      }
+
+      return {
+        chatHistory: [...state.chatHistory, next].slice(-CHAT_HISTORY_LIMIT),
+      };
+    });
   },
   triggerGlobalSilence: (durationMs, message, sourceTreeId) => {
     const until = Date.now() + Math.max(0, durationMs);

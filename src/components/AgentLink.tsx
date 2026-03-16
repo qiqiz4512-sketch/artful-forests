@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useForestStore } from '@/stores/useForestStore';
-import { TreeAgent } from '@/types/forest';
+import { SceneTreeSnapshot, TreeAgent } from '@/types/forest';
 
 interface Props {
   agents: TreeAgent[];
+  sceneTrees?: SceneTreeSnapshot[];
   offsetX?: number;
 }
 
@@ -13,34 +14,55 @@ const ENERGY_MIN_LINKS = 6;
 const DIVINE_VISUAL_FALLBACK_MS = 10_000;
 
 function ChatBubble({ x, y, message }: { x: number; y: number; message: string }) {
+  const isPlaceholder = message.trim() === '......';
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 8, scale: 0.92 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -6, scale: 0.9 }}
-      className="absolute pointer-events-none whitespace-nowrap text-xs font-ui"
+      className="absolute pointer-events-none text-xs"
       style={{
         left: x,
         top: y,
-        transform: 'translate(-50%, -100%)',
-        padding: '6px 10px',
-        borderRadius: '999px',
-        border: '1px solid rgba(167,243,208,0.65)',
-        background: 'rgba(246,255,251,0.86)',
+        transform: 'translate(0, -100%)',
+        padding: isPlaceholder ? '5px 12px' : '7px 12px',
+        borderRadius: '18px',
+        border: '1px solid rgba(186, 206, 194, 0.52)',
+        background: 'rgba(252, 255, 253, 0.6)',
         color: 'hsl(157, 35%, 24%)',
-        boxShadow: '0 4px 14px rgba(80, 180, 140, 0.2)',
-        backdropFilter: 'blur(3px)',
-        maxWidth: 260,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
+        boxShadow: '0 8px 18px rgba(86, 112, 98, 0.16), 0 1px 0 rgba(255,255,255,0.56) inset',
+        backdropFilter: 'blur(4px)',
+        minWidth: isPlaceholder ? 68 : 96,
+        maxWidth: isPlaceholder ? 86 : 230,
+        whiteSpace: isPlaceholder ? 'nowrap' : 'pre-wrap',
+        wordBreak: 'break-word',
+        overflowWrap: 'anywhere',
+        fontFamily: "'ZCOOL KuaiLe', cursive",
+        letterSpacing: '0.02em',
+        lineHeight: 1.45,
+        position: 'relative',
       }}
     >
       {message}
+      <div
+        style={{
+          position: 'absolute',
+          left: -6,
+          top: '74%',
+          transform: 'translateY(-50%) rotate(45deg)',
+          width: 12,
+          height: 12,
+          background: 'rgba(252, 255, 253, 0.6)',
+          borderLeft: '1px solid rgba(186, 206, 194, 0.52)',
+          borderBottom: '1px solid rgba(186, 206, 194, 0.52)',
+        }}
+      />
     </motion.div>
   );
 }
 
-export default function AgentLink({ agents, offsetX = 0 }: Props) {
+export default function AgentLink({ agents, sceneTrees = [], offsetX = 0 }: Props) {
   const activeChat = useForestStore((state) => state.activeChat);
   const silenceUntil = useForestStore((state) => state.globalEffects.silenceUntil);
   const divineSurgeUntil = useForestStore((state) => state.globalEffects.divineSurgeUntil);
@@ -121,6 +143,7 @@ export default function AgentLink({ agents, offsetX = 0 }: Props) {
   const chatToRender = activeChat ?? ghostChat;
   const chatA = chatToRender ? agents.find((agent) => agent.id === chatToRender.treeAId) : null;
   const chatB = chatToRender ? agents.find((agent) => agent.id === chatToRender.treeBId) : null;
+  const treeA = chatToRender ? sceneTrees.find((tree) => tree.id === chatToRender.treeAId) : null;
 
   const hasRenderableChat = Boolean(chatToRender && chatA && chatB);
   const a = chatA;
@@ -130,6 +153,8 @@ export default function AgentLink({ agents, offsetX = 0 }: Props) {
   const ay = a ? a.position.y : 0;
   const bx = b ? b.position.x + offsetX : 0;
   const by = b ? b.position.y : 0;
+  const bubbleAnchorX = treeA ? treeA.x + treeA.size * 0.72 + offsetX : ax + 45;
+  const bubbleAnchorY = treeA ? treeA.y + treeA.size * 0.22 : ay - 25;
 
   const mx = (ax + bx) / 2;
   const minY = Math.min(ay, by);
@@ -239,13 +264,7 @@ export default function AgentLink({ agents, offsetX = 0 }: Props) {
               animate={{ opacity: isFadingBySilence ? 0 : 1, y: isFadingBySilence ? -5 : 0 }}
               transition={{ duration: 0.28, ease: 'easeOut' }}
             >
-              <ChatBubble x={ax} y={ay - 10} message={chatToRender.message} />
-            </motion.div>
-            <motion.div
-              animate={{ opacity: isFadingBySilence ? 0 : 1, y: isFadingBySilence ? -5 : 0 }}
-              transition={{ duration: 0.28, ease: 'easeOut' }}
-            >
-              <ChatBubble x={bx} y={by - 10} message="......" />
+              <ChatBubble x={bubbleAnchorX} y={bubbleAnchorY} message={chatToRender.message} />
             </motion.div>
           </>
         )}

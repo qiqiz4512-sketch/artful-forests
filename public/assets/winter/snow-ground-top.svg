@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 180" preserveAspectRatio="none">
+  <defs>
+    <linearGradient id="snowTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="70%" stop-color="#f2f9ff"/>
+      <stop offset="100%" stop-color="#ddeefb"/>
+    </linearGradient>
+    <linearGradient id="snowShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#d7e8f6" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#bdd6ea" stop-opacity="0.7"/>
+    </linearGradient>
+    <filter id="soft" x="-10%" y="-20%" width="120%" height="140%">
+      <feGaussianBlur stdDeviation="2.5"/>
+    </filter>
+  </defs>
+
+  <path d="M0,92 C70,68 132,78 196,62 C274,42 340,74 418,58 C506,40 570,70 646,60 C744,48 820,28 910,52 C1008,78 1088,34 1176,56 C1262,78 1346,40 1428,58 C1504,74 1554,64 1600,70 L1600,180 L0,180 Z" fill="url(#snowTop)"/>
+  <path d="M0,118 C88,98 168,114 252,100 C350,84 444,118 534,102 C646,82 726,108 818,98 C918,88 1010,120 1108,102 C1220,80 1306,112 1394,96 C1478,80 1540,100 1600,92 L1600,180 L0,180 Z" fill="url(#snowShade)" opacity="0.72"/>
+
+  <ellipse cx="250" cy="72" rx="210" ry="24" fill="#ffffff" opacity="0.24" filter="url(#soft)"/>
+  <ellipse cx="930" cy="62" rx="260" ry="22" fill="#ffffff" opacity="0.2" filter="url(#soft)"/>
+</svg>
