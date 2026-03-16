@@ -102,4 +102,6 @@ In Supabase Dashboard:
 ### Notes
 
 - Registration flow creates/updates a row in `public.profiles`.
-- Username login resolves email from `public.profiles` before calling Supabase password login.
+- Username login resolves email through RPC (`resolve_login_email`) before calling Supabase password login.
+- Username availability check uses RPC (`is_username_available`) to avoid anonymous profile table reads.
+- Email availability check uses RPC (`is_email_available`) to avoid repeated sign-up email rate-limit hits.

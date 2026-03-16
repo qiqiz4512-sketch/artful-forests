@@ -14,6 +14,7 @@ interface Props {
   errorPulse?: number;
   canSubmit?: boolean;
   isSubmitting?: boolean;
+  submitLabel?: string;
   onIdentifierChange: (value: string) => void;
   onEmailChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
@@ -32,6 +33,7 @@ export default function ForestLoginModal({
   errorPulse = 0,
   canSubmit = true,
   isSubmitting = false,
+  submitLabel,
   onIdentifierChange,
   onEmailChange,
   onPasswordChange,
@@ -215,7 +217,7 @@ export default function ForestLoginModal({
                     whileHover={{ scale: 1.03 }}
                     whileTap={{ scale: 0.97 }}
                   >
-                    {isSubmitting ? '提交中...' : mode === 'register' ? '注册' : '登录'}
+                    {isSubmitting ? '提交中...' : submitLabel ?? (mode === 'register' ? '注册' : '登录')}
                   </motion.button>
 
                   <span
@@ -234,14 +236,6 @@ export default function ForestLoginModal({
                   onClick={() => onSwitchMode(mode === 'register' ? 'login' : 'register')}
                 >
                   {mode === 'register' ? '已有账号，直接登录' : '没有账号，去注册'}
-                </button>
-
-                <button
-                  type="button"
-                  className="forest-login-cancel"
-                  onClick={onCancel}
-                >
-                  取消
                 </button>
               </div>
             </motion.div>

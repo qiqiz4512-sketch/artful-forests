@@ -33,6 +33,10 @@ const CRUMB_PARTICLES: CrumbParticle[] = [
   { id: 5, dx: 10, dy: -14, size: 7, rotate: -20 },
 ];
 
+const isDrawingModeActive = () => (
+  typeof document !== 'undefined' && document.body.classList.contains('drawing-mode-active')
+);
+
 export default function SquirrelCursorFx() {
   const [effects, setEffects] = useState<BiteEffect[]>([]);
   const [isHolding, setIsHolding] = useState(false);
@@ -42,6 +46,8 @@ export default function SquirrelCursorFx() {
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
+      if (isDrawingModeActive()) return;
+
       setIsHolding(true);
       setPointerPos({ x: event.clientX, y: event.clientY });
 
@@ -62,6 +68,8 @@ export default function SquirrelCursorFx() {
     };
 
     const onPointerMove = (event: PointerEvent) => {
+      if (isDrawingModeActive()) return;
+
       setPointerPos({ x: event.clientX, y: event.clientY });
 
       if (!document.body.classList.contains('winter-mode')) return;
@@ -91,11 +99,19 @@ export default function SquirrelCursorFx() {
       setIsHolding(false);
     };
 
+    const onDrawingModeChange: EventListener = () => {
+      if (!isDrawingModeActive()) return;
+      setIsHolding(false);
+      setEffects([]);
+      setFrostTrail([]);
+    };
+
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('pointercancel', onPointerUp);
     window.addEventListener('blur', onWindowBlur);
+    window.addEventListener('drawing-mode-change', onDrawingModeChange);
 
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
@@ -103,10 +119,15 @@ export default function SquirrelCursorFx() {
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
       window.removeEventListener('blur', onWindowBlur);
+      window.removeEventListener('drawing-mode-change', onDrawingModeChange);
       timersRef.current.forEach((timerId) => window.clearTimeout(timerId));
       timersRef.current = [];
     };
   }, []);
+
+  if (isDrawingModeActive()) {
+    return null;
+  }
 
   return (
     <div className="pointer-events-none fixed inset-0 z-[120]">

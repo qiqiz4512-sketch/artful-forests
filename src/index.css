@@ -70,6 +70,9 @@
     --cursor-squirrel-grabbing: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 32'%3E%3Ctext y='26' font-size='23'%3E%F0%9F%90%BF%EF%B8%8F%3C/text%3E%3Ctext x='19' y='13' font-size='12'%3E%F0%9F%8C%B0%3C/text%3E%3C/svg%3E");
     --cursor-squirrel-text: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 32'%3E%3Ctext y='26' font-size='23'%3E%F0%9F%90%BF%EF%B8%8F%3C/text%3E%3Ctext x='20' y='13' font-size='12'%3E%F0%9F%93%9D%3C/text%3E%3C/svg%3E");
     --cursor-squirrel-disabled: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 32'%3E%3Ctext y='26' font-size='23'%3E%F0%9F%90%BF%EF%B8%8F%3C/text%3E%3Ctext x='19' y='13' font-size='12'%3E%E2%9B%94%3C/text%3E%3C/svg%3E");
+    --cursor-brush-watercolor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Ctext y='28' font-size='24'%3E%F0%9F%96%8D%EF%B8%8F%3C/text%3E%3C/svg%3E");
+    --cursor-brush-crayon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Ctext y='28' font-size='24'%3E%F0%9F%96%8D%EF%B8%8F%3C/text%3E%3C/svg%3E");
+    --cursor-brush-pen: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'%3E%3Ctext y='28' font-size='24'%3E%E2%9C%92%EF%B8%8F%3C/text%3E%3C/svg%3E");
   }
 
   * {
@@ -115,10 +118,47 @@
     cursor: var(--cursor-squirrel-disabled) 8 4, not-allowed !important;
   }
 
+  .drawing-panel-cursor,
+  .drawing-panel-cursor * {
+    cursor: var(--cursor-brush-watercolor) 4 28, crosshair !important;
+  }
+
+  .drawing-panel-cursor[data-brush='watercolor'],
+  .drawing-panel-cursor[data-brush='watercolor'] * {
+    cursor: var(--cursor-brush-watercolor) 4 28, crosshair !important;
+  }
+
+  .drawing-panel-cursor[data-brush='crayon'],
+  .drawing-panel-cursor[data-brush='crayon'] * {
+    cursor: var(--cursor-brush-crayon) 4 28, crosshair !important;
+  }
+
+  .drawing-panel-cursor[data-brush='pen'],
+  .drawing-panel-cursor[data-brush='pen'] * {
+    cursor: var(--cursor-brush-pen) 4 28, crosshair !important;
+  }
+
+  .drawing-panel-cursor :disabled,
+  .drawing-panel-cursor [aria-disabled='true'] {
+    cursor: var(--cursor-squirrel-disabled) 8 4, not-allowed !important;
+  }
+
   body {
     @apply bg-background text-foreground;
     font-family: 'ZCOOL KuaiLe', cursive, sans-serif;
     overflow: hidden;
+  }
+
+  canvas.drawing-brush-watercolor {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cline x1='28' y1='4' x2='13' y2='19' stroke='%23c8a060' stroke-width='3.5' stroke-linecap='round'/%3E%3Cline x1='14' y1='18' x2='9' y2='23' stroke='%23aaaaaa' stroke-width='5' stroke-linecap='round'/%3E%3Cellipse cx='6.5' cy='26' rx='4' ry='2.3' transform='rotate(-45 6.5 26)' fill='%23f987c5' opacity='0.9'/%3E%3Cellipse cx='5.5' cy='27' rx='2.6' ry='1.4' transform='rotate(-45 5.5 27)' fill='%23ffc2e0' opacity='0.72'/%3E%3C/svg%3E") 4 28, crosshair !important;
+  }
+
+  canvas.drawing-brush-crayon {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M27 5 L29 7 L13 23 L11 21 Z' fill='%23f5a62a'/%3E%3Cpath d='M27 5 L28 6 L12 22 L11 21 Z' fill='rgba(255,255,255,0.32)'/%3E%3Cpath d='M11 21 L13 23 L9 27 L7 25 Z' fill='%23ffe0a0'/%3E%3Cpath d='M7 25 L9 27 L5 30 L4 28 Z' fill='%23c8841c'/%3E%3C/svg%3E") 4 28, crosshair !important;
+  }
+
+  canvas.drawing-brush-pen {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M26 4 L29 7 L14 22 L11 19 Z' fill='%233a3a3a'/%3E%3Cpath d='M26 4 L28 5 L27 7 L24 4 Z' fill='%236688aa'/%3E%3Cpath d='M11 19 L14 22 L8 27 L5 24 Z' fill='%23cccccc'/%3E%3Cpath d='M5 24 L8 27 L5 30 Z' fill='%23222222'/%3E%3C/svg%3E") 4 28, crosshair !important;
   }
 }
 
@@ -708,6 +748,82 @@
     box-shadow: 0 18px 36px rgba(62, 30, 88, 0.42) !important;
   }
 
+  .season-bird-layer {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 10;
+    overflow: hidden;
+  }
+
+  .season-bird {
+    position: absolute;
+    width: var(--bird-size, 82px);
+    height: calc(var(--bird-size, 82px) * 0.78);
+    transform-origin: center;
+    animation-timing-function: linear;
+    animation-iteration-count: 1;
+    filter: drop-shadow(0 6px 10px rgba(33, 77, 120, 0.32)) drop-shadow(0 2px 4px rgba(0,0,0,0.18));
+  }
+
+  .season-bird--ltr {
+    left: -20vw;
+    animation-name: season-bird-fly-ltr;
+  }
+
+  .season-bird--rtl {
+    left: 120vw;
+    transform: scaleX(-1);
+    animation-name: season-bird-fly-rtl;
+  }
+
+  .season-bird-svg {
+    width: 100%;
+    height: 100%;
+    animation: season-bird-flap 360ms ease-in-out infinite alternate;
+  }
+
+  .season-bird-seeds {
+    position: absolute;
+    left: 14px;
+    top: 28px;
+    width: 38px;
+    height: 18px;
+    overflow: visible;
+  }
+
+  .season-bird-seed {
+    position: absolute;
+    top: 0;
+    width: 5px;
+    height: 7px;
+    border-radius: 6px 6px 8px 8px;
+    background: radial-gradient(circle at 45% 28%, #f7dd99 0%, #d2b061 58%, #a4843f 100%);
+    opacity: 0;
+    animation: season-bird-seed-fall 1.6s ease-in 1 forwards;
+  }
+
+  .tree-perched-birds {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 13;
+  }
+
+  .tree-perched-bird {
+    position: absolute;
+    width: 34px;
+    height: 26px;
+    transform-origin: center;
+    filter: drop-shadow(0 2px 3px rgba(22, 56, 82, 0.2));
+    animation: perched-bird-bob 2.6s ease-in-out infinite;
+  }
+
+  .tree-perched-bird-svg {
+    width: 100%;
+    height: 100%;
+  }
+
   @keyframes summer-beam-breathe {
     0%,
     100% {
@@ -745,6 +861,69 @@
     50% {
       opacity: 0.95;
       box-shadow: 0 0 14px rgba(255, 238, 156, 0.66);
+    }
+  }
+
+  @keyframes season-bird-fly-ltr {
+    0% {
+      transform: translate3d(0, 0, 0) rotate(2deg);
+    }
+    35% {
+      transform: translate3d(46vw, -10px, 0) rotate(-2deg);
+    }
+    70% {
+      transform: translate3d(90vw, 6px, 0) rotate(1deg);
+    }
+    100% {
+      transform: translate3d(136vw, 0, 0) rotate(-1deg);
+    }
+  }
+
+  @keyframes season-bird-fly-rtl {
+    0% {
+      transform: scaleX(-1) translate3d(0, 0, 0) rotate(2deg);
+    }
+    35% {
+      transform: scaleX(-1) translate3d(-46vw, -10px, 0) rotate(-2deg);
+    }
+    70% {
+      transform: scaleX(-1) translate3d(-90vw, 6px, 0) rotate(1deg);
+    }
+    100% {
+      transform: scaleX(-1) translate3d(-136vw, 0, 0) rotate(-1deg);
+    }
+  }
+
+  @keyframes season-bird-flap {
+    0% {
+      transform: translateY(0) rotate(-2deg);
+    }
+    100% {
+      transform: translateY(-1px) rotate(2deg);
+    }
+  }
+
+  @keyframes season-bird-seed-fall {
+    0% {
+      opacity: 0;
+      transform: translate3d(0, 0, 0) scale(0.72);
+    }
+    10% {
+      opacity: 0.95;
+    }
+    100% {
+      opacity: 0;
+      transform: translate3d(calc((var(--seed-drift, 6px)) * -1), 94px, 0) scale(1.02);
+    }
+  }
+
+  @keyframes perched-bird-bob {
+    0%,
+    100% {
+      margin-top: 0;
+    }
+    50% {
+      margin-top: -1.5px;
     }
   }
 

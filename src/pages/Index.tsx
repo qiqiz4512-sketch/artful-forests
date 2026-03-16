@@ -10,6 +10,8 @@ import DrawingPanel from '@/components/DrawingPanel';
 import WindChime from '@/components/WindChime';
 import SummerTemporalEffects from '@/components/SummerTemporalEffects';
 import WinterSeasonEffects from '@/components/WinterSeasonEffects';
+import BirdSeedFlyover from '@/components/BirdSeedFlyover';
+import TreePerchedBirds from '@/components/TreePerchedBirds';
 import PlantedTree from '@/components/PlantedTree';
 import PlantingGhost from '@/components/PlantingGhost';
 import AgentLink from '@/components/AgentLink';
@@ -52,6 +54,47 @@ const FOREST_BGM_AUDIO_URL = '/assets/forest-bgm.mp3';
 const FOREST_BGM_ICON_URL = '/assets/bgm-mushroom.png';
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_PATTERN = /^[\p{L}\p{N}_-]{2,24}$/u;
+const AUTH_RATE_LIMIT_COOLDOWN_SECONDS = 60;
+
+function isRateLimitAuthError(message: string): boolean {
+  const source = message.toLowerCase();
+  return source.includes('email rate limit exceeded')
+    || source.includes('over_email_send_rate_limit')
+    || source.includes('over_request_rate_limit')
+    || source.includes('too many requests')
+    || source.includes('for security purposes, you can only request this after');
+}
+
+function getRateLimitCooldownSeconds(message: string): number {
+  const source = message.toLowerCase();
+  const secondMatch = source.match(/(\d+)\s*second/);
+  if (secondMatch) return Math.max(1, Number(secondMatch[1]));
+
+  const minuteMatch = source.match(/(\d+)\s*minute/);
+  if (minuteMatch) return Math.max(1, Number(minuteMatch[1]) * 60);
+
+  return AUTH_RATE_LIMIT_COOLDOWN_SECONDS;
+}
+
+function isMissingRpcFunctionError(message: string, functionName: string): boolean {
+  const source = message.toLowerCase();
+  return source.includes(`could not find the function public.${functionName}`)
+    || (source.includes('schema cache') && source.includes(functionName.toLowerCase()));
+}
+
+function mapAuthErrorMessage(message: string): string {
+  const source = message.toLowerCase();
+
+  if (source.includes('invalid login credentials')) return '账号或密码不正确，请重试';
+  if (source.includes('email not confirmed')) return '邮箱尚未验证，请先完成邮箱验证';
+  if (source.includes('user already registered')) return '该邮箱已注册，请直接登录';
+  if (source.includes('password should be at least')) return '密码至少需要 6 位';
+  if (source.includes('email address') && source.includes('invalid')) return '邮箱格式不正确';
+  if (source.includes('email rate limit exceeded') || source.includes('over_email_send_rate_limit')) return '邮件发送触发限流，请稍后再试或直接登录';
+  if (source.includes('network')) return '网络异常，请稍后重试';
+
+  return message;
+}
 
 interface ProfileRow {
   id: string;
@@ -176,6 +219,8 @@ export default function Index() {
   const [loginError, setLoginError] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authCooldownUntil, setAuthCooldownUntil] = useState<number | null>(null);
+  const [cooldownNow, setCooldownNow] = useState(Date.now());
   const [loginErrorPulse, setLoginErrorPulse] = useState(0);
   const [loginPulse, setLoginPulse] = useState(0);
   const [season, setSeason] = useState<SeasonMode>('auto');
@@ -242,7 +287,29 @@ export default function Index() {
   const activeEcologyAtmosphere = getWorldEcologyAtmosphere(visibleWorldCenterX, worldWidth);
   const minPlantY = viewportHeight * 0.55;
   const maxPlantY = viewportHeight * 0.85;
+  const authCooldownSeconds = authCooldownUntil === null
+    ? 0
+    : Math.max(0, Math.ceil((authCooldownUntil - cooldownNow) / 1000));
+  const authCooldownMessage = authCooldownSeconds > 0 ? `邮件发送限流，请 ${authCooldownSeconds} 秒后重试` : '';
   const { emissionRateMultiplier } = useForestEcology();
+
+  useEffect(() => {
+    if (authCooldownUntil === null) return;
+
+    const timer = window.setInterval(() => {
+      setCooldownNow(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [authCooldownUntil]);
+
+  useEffect(() => {
+    if (authCooldownUntil === null) return;
+    if (Date.now() < authCooldownUntil) return;
+    setAuthCooldownUntil(null);
+  }, [authCooldownUntil, cooldownNow]);
   const showTreeNotice = useCallback((text: string, sub: string, emoji: string, durationMs = 3200, treeId?: string) => {
     if (treeNoticeTimerRef.current !== null) {
       window.clearTimeout(treeNoticeTimerRef.current);
@@ -283,6 +350,20 @@ export default function Index() {
     return user.email ?? null;
   }, []);
 
+  const showAuthError = useCallback((rawMessage: string) => {
+    if (isRateLimitAuthError(rawMessage)) {
+      const waitSeconds = getRateLimitCooldownSeconds(rawMessage);
+      setAuthCooldownUntil(Date.now() + waitSeconds * 1000);
+      setCooldownNow(Date.now());
+      setLoginError('');
+      setLoginErrorPulse((prev) => prev + 1);
+      return;
+    }
+
+    setLoginError(mapAuthErrorMessage(rawMessage));
+    setLoginErrorPulse((prev) => prev + 1);
+  }, []);
+
   useEffect(() => {
     let active = true;
 
@@ -318,8 +399,7 @@ export default function Index() {
     if (username) {
       const { error } = await supabase.auth.signOut();
       if (error) {
-        setLoginError(error.message);
-        setLoginErrorPulse((prev) => prev + 1);
+        showAuthError(error.message);
         return 'noop';
       }
       setUsername(null);
@@ -334,12 +414,17 @@ export default function Index() {
     setLoginError('');
     setLoginModalOpen(true);
     return 'noop';
-  }, [authSubmitting, showTreeNotice, username]);
+  }, [authSubmitting, showAuthError, showTreeNotice, username]);
 
   const handleSubmitAuth = useCallback(async () => {
     const trimmedIdentifier = identifierInput.trim();
     const trimmedEmail = emailInput.trim().toLowerCase();
     const trimmedPassword = passwordInput.trim();
+
+    if (authCooldownSeconds > 0) {
+      setLoginErrorPulse((prev) => prev + 1);
+      return;
+    }
 
     if (!trimmedIdentifier) {
       setLoginError(authMode === 'register' ? '请先设置用户名' : '请先输入邮箱或用户名');
@@ -376,13 +461,33 @@ export default function Index() {
           return;
         }
 
-        const { data: existingProfile } = await supabase
-          .from('profiles')
-          .select('id')
-          .ilike('username', trimmedIdentifier)
-          .maybeSingle<Pick<ProfileRow, 'id'>>();
+        const { data: isEmailAvailable, error: emailCheckError } = await supabase
+          .rpc('is_email_available', { candidate: trimmedEmail });
 
-        if (existingProfile) {
+        if (emailCheckError) {
+          if (!isMissingRpcFunctionError(emailCheckError.message, 'is_email_available')) {
+            showAuthError(emailCheckError.message);
+            return;
+          }
+        }
+
+        if (isEmailAvailable === false) {
+          setAuthMode('login');
+          setIdentifierInput(trimmedEmail);
+          setLoginError('该邮箱已注册，请直接登录');
+          setLoginErrorPulse((prev) => prev + 1);
+          return;
+        }
+
+        const { data: isUsernameAvailable, error: usernameCheckError } = await supabase
+          .rpc('is_username_available', { candidate: trimmedIdentifier });
+
+        if (usernameCheckError) {
+          showAuthError(usernameCheckError.message);
+          return;
+        }
+
+        if (!isUsernameAvailable) {
           setLoginError('该用户名已被使用，请换一个');
           setLoginErrorPulse((prev) => prev + 1);
           return;
@@ -397,8 +502,29 @@ export default function Index() {
         });
 
         if (error) {
-          setLoginError(error.message);
-          setLoginErrorPulse((prev) => prev + 1);
+          if (isRateLimitAuthError(error.message)) {
+            // Supabase may rate-limit confirmation emails even when this account already exists.
+            const { data: fastLoginData, error: fastLoginError } = await supabase.auth.signInWithPassword({
+              email: trimmedEmail,
+              password: trimmedPassword,
+            });
+
+            if (!fastLoginError && fastLoginData.user) {
+              const profileLabel = await resolveProfileLabel(fastLoginData.user);
+              const finalName = profileLabel ?? fastLoginData.user.email ?? trimmedIdentifier;
+              setUsername(finalName);
+              setIdentifierInput('');
+              setEmailInput('');
+              setPasswordInput('');
+              setLoginPulse((prev) => prev + 1);
+              setLoginModalOpen(false);
+              showTreeNotice(`欢迎回来，${finalName}`, '检测到账号已存在，已为你直接登录', '🎐', 3000);
+              showAuthCelebration('登录成功', `${finalName}，已跳过重复注册流程`, '🎫');
+              return;
+            }
+          }
+
+          showAuthError(error.message);
           return;
         }
 
@@ -438,39 +564,27 @@ export default function Index() {
         return;
       }
 
-      const isEmailLogin = EMAIL_PATTERN.test(trimmedIdentifier);
-      let resolvedEmail = trimmedIdentifier.toLowerCase();
+      const { data: resolvedEmail, error: resolveEmailError } = await supabase
+        .rpc('resolve_login_email', { identifier: trimmedIdentifier });
 
-      if (!isEmailLogin) {
-        const { data: profileByUsername, error: usernameLookupError } = await supabase
-          .from('profiles')
-          .select('email,username')
-          .ilike('username', trimmedIdentifier)
-          .maybeSingle<Pick<ProfileRow, 'email' | 'username'>>();
+      if (resolveEmailError) {
+        showAuthError(resolveEmailError.message);
+        return;
+      }
 
-        if (usernameLookupError) {
-          setLoginError(usernameLookupError.message);
-          setLoginErrorPulse((prev) => prev + 1);
-          return;
-        }
-
-        if (!profileByUsername?.email) {
-          setLoginError('未找到该用户名，请检查后重试');
-          setLoginErrorPulse((prev) => prev + 1);
-          return;
-        }
-
-        resolvedEmail = profileByUsername.email;
+      if (!resolvedEmail || !EMAIL_PATTERN.test(resolvedEmail)) {
+        setLoginError('未找到该账号，请检查后重试');
+        setLoginErrorPulse((prev) => prev + 1);
+        return;
       }
 
       const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email: resolvedEmail,
+        email: resolvedEmail.toLowerCase(),
         password: trimmedPassword,
       });
 
       if (signInError) {
-        setLoginError(signInError.message);
-        setLoginErrorPulse((prev) => prev + 1);
+        showAuthError(signInError.message);
         return;
       }
 
@@ -487,7 +601,7 @@ export default function Index() {
     } finally {
       setAuthSubmitting(false);
     }
-  }, [authMode, emailInput, identifierInput, passwordInput, resolveProfileLabel, showAuthCelebration, showTreeNotice]);
+  }, [authCooldownSeconds, authMode, emailInput, identifierInput, passwordInput, resolveProfileLabel, showAuthCelebration, showAuthError, showTreeNotice]);
 
   const handleCancelLogin = useCallback(() => {
     setLoginModalOpen(false);
@@ -526,9 +640,13 @@ export default function Index() {
     setPasswordInput('');
   }, []);
 
-  const canSubmitAuth = authMode === 'register'
+  const canSubmitAuth = authCooldownSeconds === 0 && (authMode === 'register'
     ? USERNAME_PATTERN.test(identifierInput.trim()) && EMAIL_PATTERN.test(emailInput.trim().toLowerCase()) && passwordInput.trim().length >= 6
-    : identifierInput.trim().length >= 2 && passwordInput.trim().length >= 6;
+    : identifierInput.trim().length >= 2 && passwordInput.trim().length >= 6);
+
+  const authSubmitLabel = authCooldownSeconds > 0
+    ? `${authCooldownSeconds}秒后重试`
+    : undefined;
 
   const {
     isAutoPlanting,
@@ -1005,6 +1123,7 @@ export default function Index() {
 
       <SummerTemporalEffects season={resolvedSeason} theme={theme} />
       <WinterSeasonEffects season={resolvedSeason} weather={weather} />
+      <BirdSeedFlyover season={resolvedSeason} />
 
       {/* World edge hints */}
       <AnimatePresence>
@@ -1241,6 +1360,8 @@ export default function Index() {
               />
             );
           })}
+
+          <TreePerchedBirds season={resolvedSeason} trees={visibleTrees} />
 
           <AgentLink
             agents={agents}
@@ -1598,8 +1719,9 @@ export default function Index() {
         identifier={identifierInput}
         email={emailInput}
         password={passwordInput}
+        submitLabel={authSubmitLabel}
         isSubmitting={authSubmitting}
-        errorMessage={loginError}
+        errorMessage={authCooldownMessage || loginError}
         errorPulse={loginErrorPulse}
         canSubmit={canSubmitAuth}
         onIdentifierChange={handleIdentifierChange}
