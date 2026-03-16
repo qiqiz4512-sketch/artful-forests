@@ -271,7 +271,7 @@ export default function Index() {
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1000;
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
   const worldWidth = Math.max(WORLD_WIDTH_MIN, viewportWidth * WORLD_WIDTH_MULTIPLIER);
-  const scrollMin = -Math.max(0, worldWidth - viewportWidth) * 2;
+  const scrollMin = -Math.max(0, worldWidth - viewportWidth);
   const scrollMax = 0;
   const clampScrollX = useCallback(
     (value: number) => Math.max(scrollMin, Math.min(scrollMax, value)),
