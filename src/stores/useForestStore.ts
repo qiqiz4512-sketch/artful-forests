@@ -154,6 +154,33 @@ const isSameDialogueEntry = (a: ChatHistoryEntry, b: ChatHistoryEntry): boolean 
   && Math.abs(a.createdAt - b.createdAt) <= 2500
 );
 
+// 取消息前 N 个字符作为"指纹"，用于宽窗口去重
+const msgFingerprint = (message: string, len = 12) =>
+  Array.from(message.replace(/\s+/g, '')).slice(0, len).join('');
+
+// 在最近 windowSize 条记录里检查重复：
+// - 同一发言者发过前缀相似的消息（宽窗口）
+// - 任意发言者发过完全相同的消息内容（跨树去重，较短窗口）
+const isDuplicateInWindow = (
+  history: ChatHistoryEntry[],
+  next: ChatHistoryEntry,
+  windowSize = 40,
+): boolean => {
+  const fp = msgFingerprint(next.message);
+  if (!fp) return false;
+  const recent = history.slice(-windowSize);
+  // 同一棵树：前12字相同视为重复
+  const sameSpeakerDup = recent.some(
+    (entry) => entry.speakerId === next.speakerId && msgFingerprint(entry.message) === fp,
+  );
+  if (sameSpeakerDup) return true;
+  // 跨树：最近20条内完全相同的文本不允许再出现
+  const crossSpeakerWindow = recent.slice(-20);
+  return crossSpeakerWindow.some(
+    (entry) => entry.speakerId !== next.speakerId && entry.message === next.message,
+  );
+};
+
 const applyGrowthScore = (agents: TreeAgent[], speakerId: string, listenerId: string, message: string): TreeAgent[] => {
   const delta = scoreFromDialogue(message);
   if (delta <= 0) return agents;
@@ -531,6 +558,11 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
         return {
           chatHistory: [...state.chatHistory.slice(0, -1), merged].slice(-CHAT_HISTORY_LIMIT),
         };
+      }
+
+      // 对自动生成的A2A消息做宽窗口去重，避免同一棵树的相似话反复出现在聊天框
+      if (next.source === 'auto' && isDuplicateInWindow(state.chatHistory, next)) {
+        return {};
       }
 
       return {

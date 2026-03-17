@@ -14,7 +14,25 @@ const lastConvByPair = new Map<string, { message: string; time: number }>();
 const lastActiveByTree = new Map<string, number>();
 const nextSpeakerReadyAtByTree = new Map<string, number>();
 
-const SILENCE_RESCUE_MS = 3 * 60 * 1000; // 3 minutes idle triggers possible rescue
+// Per-tree recent messages dedup — 防止同一棵树在不同对话中重复相似内容
+const recentMessagesByTree = new Map<string, string[]>();
+const RECENT_MSG_WINDOW = 5;
+const DIVINE_RECENT_MSG_WINDOW = 8; // 神启树窗口更大，更严格去重
+
+const isMsgNearDuplicate = (speakerId: string, message: string): boolean => {
+  const recent = recentMessagesByTree.get(speakerId) ?? [];
+  const prefix = Array.from(message).slice(0, 10).join('');
+  return recent.some((m) => Array.from(m).slice(0, 10).join('') === prefix);
+};
+
+const recordSpeakerMessage = (speakerId: string, message: string, personality?: string) => {
+  const window = personality === '神启' ? DIVINE_RECENT_MSG_WINDOW : RECENT_MSG_WINDOW;
+  const recent = recentMessagesByTree.get(speakerId) ?? [];
+  recent.unshift(message);
+  recentMessagesByTree.set(speakerId, recent.slice(0, window));
+};
+
+const SILENCE_RESCUE_MS = 90_000; // 90 seconds idle triggers possible rescue
 const DIVINE_SURGE_CHAT_MULTIPLIER = 1.9;
 const DIVINE_ADORATION_RANGE = 420;
 const DIVINE_SURGE_ADORATION_RANGE = 680;
@@ -35,11 +53,11 @@ const SHY_RECEIVER_STRANGER_BOOST = 1.18;
 const SHY_RECEIVER_WARMUP_BOOST = 1.08;
 const SHY_RECEIVER_FAMILIAR_DAMPING = 0.72;
 const SHY_RECEIVER_INTIMACY_SOFT_CAP = 65;
-// Default to carnival mode: faster chat cadence and quicker turn-taking.
-const A2A_BASE_DELAY_MS = 2200;
-const A2A_DELAY_JITTER_MS = 4200;
-const A2A_TALKING_DURATION_MS = 2800;
-const A2A_TALKING_DURATION_DIVINE_MS = 1900;
+// Lively mode: very short gap between rounds, always feels busy.
+const A2A_BASE_DELAY_MS = 500;
+const A2A_DELAY_JITTER_MS = 1200;
+const A2A_TALKING_DURATION_MS = 2200;
+const A2A_TALKING_DURATION_DIVINE_MS = 1500;
 const PERSONALITY_TALK_RATE: Record<string, number> = {
   活泼: 1.38,
   顽皮: 1.22,
@@ -47,7 +65,8 @@ const PERSONALITY_TALK_RATE: Record<string, number> = {
   温柔: 0.95,
   睿智: 1,
   社恐: 0.38,
-  神启: 1.15,
+  // 神启树讲究"神谕珍贵"，发言频率低于普通树
+  神启: 0.55,
 };
 
 const CROSS_ZONE_BRIDGES = [
@@ -354,10 +373,12 @@ const resolveSpeakingPace = (agent: { personality?: string; metadata?: { chatter
 };
 
 const pickSpeakerCooldownMs = (agent: { personality?: string; metadata?: { chatterbox?: boolean; speakingPace?: SpeakingPace } }) => {
+  // 神启树：发言后沉默14-22s，体现"神谕珍贵"
+  if (agent.personality === '神启') return 14000 + Math.random() * 8000;
   const pace = resolveSpeakingPace(agent);
-  if (pace === 'chatterbox') return 2000 + Math.random() * 1000;
-  if (pace === 'normal') return 10000 + Math.random() * 5000;
-  return 22000 + Math.random() * 18000;
+  if (pace === 'chatterbox') return 1000 + Math.random() * 500;
+  if (pace === 'normal') return 3500 + Math.random() * 2000;
+  return 9000 + Math.random() * 6000;
 };
 
 const isSpeakerReady = (agent: { id: string }, now: number) => now >= (nextSpeakerReadyAtByTree.get(agent.id) ?? 0);
@@ -588,8 +609,15 @@ export function useAgentA2A() {
           : composedMessage;
       const message = compactA2AMessage(rawMessage, nextA.personality);
 
+      // 去重：若该发言者最近说过相似内容，跳过本轮（不影响其他树继续聊）
+      if (isMsgNearDuplicate(nextA.id, message)) {
+        schedule();
+        return;
+      }
+
       // Update echo relay record
       lastConvByPair.set(pairKey, { message, time: Date.now() });
+      recordSpeakerMessage(nextA.id, message, nextA.personality);
 
       // Update last-active timestamps
       lastActiveByTree.set(nextA.id, Date.now());

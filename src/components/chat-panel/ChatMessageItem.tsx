@@ -268,6 +268,7 @@ export function ChatMessageItem({
   const showBubbleHeader = !showA2AMetaAboveAvatar && messageTypeFilter !== 'u2a';
   const mentionTargetName = isUserGroupMessage && listener ? displayName(listener.name) : null;
   const canMentionSpeaker = messageTypeFilter === 'a2a' && !isMe && Boolean(speaker?.id);
+  const isDivineSpeaker = !isMe && personality === '神启';
 
   const avatarNode = (
     <>
@@ -419,13 +420,19 @@ export function ChatMessageItem({
             textAlign: 'left',
             background: role === 'me'
               ? 'linear-gradient(160deg, rgba(99, 160, 218, 0.9), rgba(70, 128, 194, 0.92))'
-              : `linear-gradient(160deg, ${bubbleColor}12, rgba(255,255,255,0.62))`,
+              : isDivineSpeaker
+                ? 'linear-gradient(145deg, rgba(34, 28, 12, 0.78), rgba(60, 46, 10, 0.62))'
+                : `linear-gradient(160deg, ${bubbleColor}12, rgba(255,255,255,0.62))`,
             border: role === 'me'
               ? '1px solid rgba(104, 163, 216, 0.7)'
-              : `1px solid ${bubbleColor}2a`,
+              : isDivineSpeaker
+                ? '1px solid rgba(212, 167, 44, 0.68)'
+                : `1px solid ${bubbleColor}2a`,
             boxShadow: role === 'me'
               ? '0 6px 14px rgba(55, 105, 154, 0.24), inset 0 1px 0 rgba(190, 225, 255, 0.38)'
-              : '0 3px 10px rgba(60, 86, 71, 0.08)',
+              : isDivineSpeaker
+                ? '0 4px 16px rgba(212, 167, 44, 0.28), inset 0 0 0 1px rgba(255, 220, 120, 0.22)'
+                : '0 3px 10px rgba(60, 86, 71, 0.08)',
             backdropFilter: 'blur(8px)',
             height: 'auto',
             overflow: 'visible',
@@ -506,7 +513,7 @@ export function ChatMessageItem({
                   borderLeft: echo ? `2px solid ${bubbleColor}66` : 'none',
                   borderRadius: echo ? 8 : 0,
                   background: echo ? `${bubbleColor}12` : 'transparent',
-                  color: isMe ? 'rgba(240, 249, 255, 0.96)' : 'hsl(150, 22%, 24%)',
+                  color: isMe ? 'rgba(240, 249, 255, 0.96)' : isDivineSpeaker ? 'rgba(255, 238, 178, 0.94)' : 'hsl(150, 22%, 24%)',
                   fontSize: bubbleStyle.fontSize ?? 12,
                   lineHeight: bubbleStyle.lineHeight ?? 1.58,
                   letterSpacing: '0.01em',

@@ -165,8 +165,9 @@ export function useChatPanelState({
     if (entry.type === 'epic') return 'epic';
     if (entry.conversationMode === 'group') return 'a2a';
     if (entry.conversationMode === 'direct') return 'u2a';
-    if (isManualTreeConversation(entry)) return 'u2a';
+    // 自动生成的A2A对话（含神启树与其他树的互动）一律显示在森林社交
     if (entry.source === 'auto') return 'a2a';
+    if (isManualTreeConversation(entry)) return 'u2a';
     return 'a2a';
   };
 
