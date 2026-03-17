@@ -59,6 +59,7 @@ export default function Particles({ colors, weather, season, emissionRateMultipl
   emissionMulRef.current = emissionRateMultiplier;
   const autumnSunny = season === 'autumn' && weather === 'sunny';
   const noPetalSeason = (season === 'summer' || season === 'winter') && weather === 'sunny' && colors.particleType === 'petal';
+  const noFireflyAutumn = season === 'autumn' && colors.particleType === 'firefly';
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -66,7 +67,7 @@ export default function Particles({ colors, weather, season, emissionRateMultipl
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
-    const count = getParticleCount(colors.particleType, weather, emissionMulRef.current, autumnSunny, noPetalSeason);
+    const count = getParticleCount(colors.particleType, weather, emissionMulRef.current, autumnSunny, noPetalSeason, noFireflyAutumn);
     particlesRef.current = Array.from({ length: count }, () =>
       createParticle(canvas.width, canvas.height, colors.particleType, weather, atmosphere, autumnSunny, noPetalSeason)
     );
@@ -109,6 +110,7 @@ export default function Particles({ colors, weather, season, emissionRateMultipl
 
         // Firefly (night, non-weather)
         if (colors.particleType === 'firefly' && weather === 'sunny') {
+          if (season === 'autumn') return;
           const glow = 0.3 + Math.sin(p.phase) * 0.7;
           ctx.beginPath();
           ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
@@ -226,7 +228,7 @@ export default function Particles({ colors, weather, season, emissionRateMultipl
       });
 
       // Dynamically adjust particle count without restarting animation
-      const targetCount = getParticleCount(colors.particleType, weather, emissionMulRef.current, autumnSunny, noPetalSeason);
+      const targetCount = getParticleCount(colors.particleType, weather, emissionMulRef.current, autumnSunny, noPetalSeason, noFireflyAutumn);
       if (particlesRef.current.length < targetCount) {
         particlesRef.current.push(
           createParticle(canvas.width, canvas.height, colors.particleType, weather, atmosphere, autumnSunny, noPetalSeason)
@@ -243,7 +245,7 @@ export default function Particles({ colors, weather, season, emissionRateMultipl
       cancelAnimationFrame(animRef.current);
       window.removeEventListener('resize', onResize);
     };
-  }, [atmosphere, autumnSunny, colors, noPetalSeason, season, weather]);
+  }, [atmosphere, autumnSunny, colors, noFireflyAutumn, noPetalSeason, season, weather]);
 
   useEffect(() => {
     if (!interactionEvent || !interactionOrigin) return;
@@ -318,8 +320,8 @@ export default function Particles({ colors, weather, season, emissionRateMultipl
   );
 }
 
-function getParticleCount(type: string, weather: WeatherType, emissionRateMultiplier: number, autumnSunny: boolean, noPetalSeason: boolean): number {
-  if (noPetalSeason) return 0;
+function getParticleCount(type: string, weather: WeatherType, emissionRateMultiplier: number, autumnSunny: boolean, noPetalSeason: boolean, noFireflyAutumn = false): number {
+  if (noPetalSeason || noFireflyAutumn) return 0;
   const base = weather === 'rain' ? 140 : weather === 'snow' ? 80 : autumnSunny ? 30 : type === 'firefly' ? 25 : 20;
   return Math.max(8, Math.round(base * Math.max(0.5, emissionRateMultiplier)));
 }

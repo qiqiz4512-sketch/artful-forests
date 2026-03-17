@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useForestStore } from '@/stores/useForestStore';
@@ -116,6 +116,29 @@ export default function TreeIdentity({ agentId, name, tag, personality, shapeId,
     return self?.metadata?.drawingData as DrawingData | undefined;
   }, [self?.metadata?.drawingData]);
 
+  const [cardHovered, setCardHovered] = useState(false);
+  const cardHoverTimerRef = useRef<number | null>(null);
+  const showCard = hovered || cardHovered;
+
+  const handleCardMouseEnter = () => {
+    if (cardHoverTimerRef.current !== null) {
+      window.clearTimeout(cardHoverTimerRef.current);
+      cardHoverTimerRef.current = null;
+    }
+    setCardHovered(true);
+  };
+
+  const handleCardMouseLeave = () => {
+    cardHoverTimerRef.current = window.setTimeout(() => {
+      setCardHovered(false);
+      cardHoverTimerRef.current = null;
+    }, 200);
+  };
+
+  useEffect(() => () => {
+    if (cardHoverTimerRef.current !== null) window.clearTimeout(cardHoverTimerRef.current);
+  }, []);
+
   return (
     <div
       className="absolute pointer-events-none"
@@ -132,7 +155,7 @@ export default function TreeIdentity({ agentId, name, tag, personality, shapeId,
       }}
     >
       <AnimatePresence>
-        {hovered && (
+        {showCard && (
           <motion.div
             key="identity-card"
             initial={{ opacity: 0, scale: 0.8, y: 10 }}
@@ -140,11 +163,14 @@ export default function TreeIdentity({ agentId, name, tag, personality, shapeId,
             exit={{ opacity: 0, scale: 0.86, y: -8 }}
             transition={{ type: 'spring', stiffness: 300, damping: 25 }}
             onClick={() => navigate(`/tree/${agentId}`)}
+            onMouseEnter={handleCardMouseEnter}
+            onMouseLeave={handleCardMouseLeave}
             style={{
               width: 180,
               scale: cardCompensationScale,
               transformOrigin: 'bottom center',
               cursor: 'pointer',
+              pointerEvents: 'auto',
             }}
           >
             <div
