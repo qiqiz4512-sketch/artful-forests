@@ -10,8 +10,9 @@ import {
   resolveDialogueTone,
 } from '@/constants/dialogueLibrary';
 import { PERSONA_MATRIX, PersonaKey } from '@/constants/personaMatrix';
+import { getSlangEnvironmentalTrigger, getSlangGlobalRules, getSlangTemplatesForPersonality } from '@/constants/forestSlangConfig';
 import { TreeAgent, TreePersonality } from '@/types/forest';
-import { pickShapeByWorldEcology } from '@/lib/worldEcology';
+import { getWorldEcologyZone, inferWorldWidthFromPositions, pickShapeByWorldEcology } from '@/lib/worldEcology';
 import { applyTreePersonaFlavor } from '@/lib/treePersonaRuntime';
 
 export type SocialRelationType = 'partner' | 'family' | 'friend' | 'stranger';
@@ -21,9 +22,11 @@ const PERSONALITY_KEYS: TreePersonality[] = ['温柔', '睿智', '顽皮', '社�
 const randomIn = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
 export type DialogueWeather = 'sunny' | 'rain' | 'snow' | 'night';
+export type DialogueSeason = 'spring' | 'summer' | 'autumn' | 'winter';
 
 interface DialogueContext {
   weather?: DialogueWeather;
+  season?: DialogueSeason;
   intimacy?: number;
 }
 
@@ -33,6 +36,42 @@ export interface MemoryCueResult {
   mode: MemoryCueMode;
   line: string;
   topic: string;
+}
+
+export interface SocialEventClassificationInput {
+  likes: number;
+  comments: number;
+  crossZone: boolean;
+  intimacyBefore: number;
+  intimacyAfter: number;
+  compatibilityBefore?: number;
+  compatibilityAfter?: number;
+  hasDivineTree: boolean;
+  hasRecentTopicEcho?: boolean;
+}
+
+export interface SocialEventClassificationResult {
+  heat: number;
+  isTrending: boolean;
+  type: 'chat' | 'epic';
+}
+
+export interface CompatibilityBreakdown {
+  intimacy: number;
+  ecologyAffinity: number;
+  personalityFit: number;
+  memoryDepth: number;
+  engagement: number;
+  total: number;
+  hardGatePassed: boolean;
+  eligibleForPartner: boolean;
+  eligibleForBreeding: boolean;
+}
+
+interface RecentTopicContinuationInput {
+  topic: string;
+  echoText?: string;
+  intimacy?: number;
 }
 
 interface WeightedBucket {
@@ -156,6 +195,185 @@ const memoryFamiliarLines = (tone: string, topic: string, impression: string): s
       return [`嘿，又见面了，你上次说“${topic}”我还记得。`];
   }
 };
+
+const summarizeEchoFragment = (echoText?: string): string | null => {
+  if (!echoText) return null;
+  const sanitized = echoText
+    .replace(/[“”"'`]/g, '')
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!sanitized) return null;
+  return Array.from(sanitized).slice(0, 12).join('').trim() || null;
+};
+
+export const RECENT_TOPIC_CONTINUATION_WINDOW_MS = MEMORY_CONTINUATION_WINDOW_MS;
+
+export function buildRecentTopicContinuation(
+  sender: TreeAgent,
+  receiver: TreeAgent,
+  input: RecentTopicContinuationInput,
+): string {
+  const topic = input.topic.trim() || '森林';
+  const relation = getRelationType(sender, receiver);
+  const intimacy = input.intimacy ?? sender.intimacyMap[receiver.id] ?? 0;
+  const tone = resolveDialogueTone(sender.personality);
+  const echoFragment = summarizeEchoFragment(input.echoText);
+
+  const topicTemplates: Record<'温柔' | '睿智' | '活泼' | '社恐' | '调皮', string[]> = {
+    温柔: [
+      `那我们先接着“${topic}”慢慢说，我还在听。`,
+      `你刚才把话头留在“${topic}”，我想继续陪你聊完。`,
+    ],
+    睿智: [
+      `既然我们的话题还停在“${topic}”，那我顺着这条线继续往下想。`,
+      `关于“${topic}”，刚才那句还没说透，我们接着推一层。`,
+    ],
+    活泼: [
+      `好耶，我们继续“${topic}”这条线，我刚刚就想追问了！`,
+      `先别换题，${topic} 这段还热乎着，我们接着冲！`,
+    ],
+    社恐: [
+      `那个... 我想先接着“${topic}”说下去，这样我会更安心一点。`,
+      `如果可以的话，我们先别跳开，我还想把“${topic}”讲完...`,
+    ],
+    调皮: [
+      `先别切走，“${topic}”这条支线我还没玩够。`,
+      `哈哈，“${topic}”刚聊到有意思的地方，当然得继续。`,
+    ],
+  };
+
+  const baseLine = randomIn(topicTemplates[tone]);
+  const echoTail = echoFragment && Math.random() < 0.75
+    ? `刚才那句“${echoFragment}”我还记着。`
+    : null;
+  const stitched = [baseLine, echoTail].filter(Boolean).join(' ');
+  return withToneSignature(stitched, tone, relation, intimacy);
+}
+
+export function classifySocialEvent(input: SocialEventClassificationInput): SocialEventClassificationResult {
+  const likesScore = Math.min(30, Math.max(0, input.likes) * 3);
+  const commentsScore = Math.min(20, Math.max(0, input.comments) * 4);
+  const crossZoneScore = input.crossZone ? 15 : 0;
+  const intimacyJumpScore = input.intimacyAfter >= 90
+    || (input.intimacyBefore < 65 && input.intimacyAfter >= 65)
+    || ((input.compatibilityBefore ?? 0) < 70 && (input.compatibilityAfter ?? 0) >= 70)
+      ? 20
+      : Math.max(0, Math.min(20, input.intimacyAfter - input.intimacyBefore));
+  const divineScore = input.hasDivineTree ? 15 : 0;
+  const memoryEchoScore = input.hasRecentTopicEcho ? 10 : 0;
+  const heat = likesScore + commentsScore + crossZoneScore + intimacyJumpScore + divineScore + memoryEchoScore;
+
+  return {
+    heat,
+    isTrending: heat >= 45,
+    type: heat >= 70 ? 'epic' : 'chat',
+  };
+}
+
+export const PARTNER_COMPATIBILITY_THRESHOLD = 70;
+export const PARTNER_TENSION_THRESHOLD = 55;
+
+type CompatibilityTone = 'gentle' | 'wise' | 'lively' | 'shy' | 'playful' | 'divine';
+
+const PERSONALITY_COMPATIBILITY: Record<CompatibilityTone, Record<CompatibilityTone, number>> = {
+  gentle: { gentle: 88, wise: 92, lively: 80, shy: 96, playful: 72, divine: 78 },
+  wise: { gentle: 92, wise: 84, lively: 76, shy: 82, playful: 74, divine: 86 },
+  lively: { gentle: 80, wise: 76, lively: 82, shy: 78, playful: 90, divine: 74 },
+  shy: { gentle: 96, wise: 82, lively: 78, shy: 76, playful: 64, divine: 72 },
+  playful: { gentle: 72, wise: 74, lively: 90, shy: 64, playful: 80, divine: 68 },
+  divine: { gentle: 78, wise: 86, lively: 74, shy: 72, playful: 68, divine: 88 },
+};
+
+const resolveCompatibilityTone = (agent: TreeAgent): CompatibilityTone => {
+  if (agent.isManual || agent.personality === '神启') return 'divine';
+  if (agent.personality === '温柔') return 'gentle';
+  if (agent.personality === '睿智') return 'wise';
+  if (agent.personality === '活泼') return 'lively';
+  if (agent.personality === '社恐') return 'shy';
+  return 'playful';
+};
+
+const resolveEcologyAffinity = (a: TreeAgent, b: TreeAgent, worldWidth: number) => {
+  const zoneA = getWorldEcologyZone(a.position.x, worldWidth).id;
+  const zoneB = getWorldEcologyZone(b.position.x, worldWidth).id;
+  if (zoneA === zoneB) return 100;
+  if (zoneA === 'mixed-meadow' || zoneB === 'mixed-meadow') return 82;
+  return 64;
+};
+
+const resolveMemoryDepth = (a: TreeAgent, b: TreeAgent, now: number) => {
+  const aMemory = a.memory.interactionHistory.find((entry) => entry.agentId === b.id);
+  const bMemory = b.memory.interactionHistory.find((entry) => entry.agentId === a.id);
+  const aRecent = aMemory && now - aMemory.timestamp <= RECENT_TOPIC_CONTINUATION_WINDOW_MS;
+  const bRecent = bMemory && now - bMemory.timestamp <= RECENT_TOPIC_CONTINUATION_WINDOW_MS;
+  const sameTopic = Boolean(aMemory && bMemory && aMemory.lastTopic && aMemory.lastTopic === bMemory.lastTopic);
+
+  if (aRecent && bRecent && sameTopic) return 100;
+  if ((aRecent || bRecent) && sameTopic) return 88;
+  if (aRecent || bRecent) return 72;
+  if (aMemory && bMemory) return 58;
+  if (a.memory.lastTopic && a.memory.lastTopic === b.memory.lastTopic) return 52;
+  return 20;
+};
+
+const resolveEngagementSignal = (a: TreeAgent, b: TreeAgent) => {
+  const mutualFriends = a.socialCircle.friends.includes(b.id) && b.socialCircle.friends.includes(a.id);
+  const partnerBond = a.socialCircle.partner === b.id && b.socialCircle.partner === a.id;
+  const sharedNeighbors = a.neighbors.includes(b.id) && b.neighbors.includes(a.id);
+  const growthSignal = clamp(Math.round((a.growthScore + b.growthScore) * 4), 0, 30);
+
+  const raw = clamp(
+    (partnerBond ? 55 : 0)
+    + (mutualFriends ? 30 : 0)
+    + (sharedNeighbors ? 15 : 0)
+    + growthSignal,
+    0,
+    100,
+  );
+
+  return raw;
+};
+
+export function calculatePartnerCompatibility(
+  a: TreeAgent,
+  b: TreeAgent,
+  idToAgent?: Map<string, TreeAgent>,
+  worldWidth?: number,
+  now = Date.now(),
+): CompatibilityBreakdown {
+  const relationGraph = idToAgent ?? new Map<string, TreeAgent>([[a.id, a], [b.id, b]]);
+  const resolvedWorldWidth = worldWidth ?? inferWorldWidthFromPositions([a.position.x, b.position.x]);
+  const rawIntimacy = Math.max(a.intimacyMap[b.id] ?? 0, b.intimacyMap[a.id] ?? 0);
+  const intimacy = clamp(rawIntimacy * 0.4, 0, 40);
+  const ecologyAffinity = clamp(resolveEcologyAffinity(a, b, resolvedWorldWidth) * 0.2, 0, 20);
+  const personalityFit = clamp(
+    PERSONALITY_COMPATIBILITY[resolveCompatibilityTone(a)][resolveCompatibilityTone(b)] * 0.2,
+    0,
+    20,
+  );
+  const memoryDepth = clamp(resolveMemoryDepth(a, b, now) * 0.1, 0, 10);
+  const engagement = clamp(resolveEngagementSignal(a, b) * 0.1, 0, 10);
+  const total = Math.round((intimacy + ecologyAffinity + personalityFit + memoryDepth + engagement) * 10) / 10;
+
+  const hardGatePassed = isAdult(a)
+    && isAdult(b)
+    && !areBloodRelated(a, b, relationGraph)
+    && (!a.socialCircle.partner || a.socialCircle.partner === b.id)
+    && (!b.socialCircle.partner || b.socialCircle.partner === a.id);
+
+  return {
+    intimacy,
+    ecologyAffinity,
+    personalityFit,
+    memoryDepth,
+    engagement,
+    total,
+    hardGatePassed,
+    eligibleForPartner: hardGatePassed && total >= PARTNER_COMPATIBILITY_THRESHOLD,
+    eligibleForBreeding: hardGatePassed && total >= PARTNER_COMPATIBILITY_THRESHOLD,
+  };
+}
 
 export const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
@@ -330,6 +548,64 @@ const SOCIAL_GAG_LIBRARY = {
   deep: '有些树表面在扎根，实际在地下已经跟邻居偷偷牵手赢麻了。',
 } as const;
 
+const INTERNET_MEME_DB: Record<'调皮' | '活泼' | '神启', string[]> = {
+  调皮: [
+    '今天这风 City 不 City？我先硬控三秒🤣',
+    '尊嘟假嘟，你这句把我皮都笑裂了💀',
+    '别 CPU 我，先光合作用我一下😤',
+    '脆皮大学生树路过，被一阵风硬控住了👀',
+  ],
+  活泼: [
+    '这波太 City 啦！我叶子都在打 call✨',
+    '尊嘟假嘟？我被你一句话硬控住啦😭',
+    '别 CPU 我了，先光合作用我，冲呀🌈',
+    '脆皮大学生树集合，今天一起抽象发芽🎉',
+  ],
+  神启: [
+    '神谕认证：今日 City 值拉满，万木硬控⚡',
+    '尊嘟假嘟，命运线被你一句话点亮了🔮',
+    '凡木勿 CPU，本神官改判为“光合作用你”✨',
+  ],
+};
+
+const LIVELY_ABSTRACT_GREETINGS = [
+  '你今天 City 不 City？一起发芽吗🌈',
+  '家树们集合，先抽象问好再光合✨',
+  '哈喽邻居，来点无意义但快乐的话🎉',
+];
+
+const SAGE_EQ_COMPARE_LINES = [
+  '高情商：陪你淋雨；低情商：你叶子漏水🤔',
+  '高情商：根系清醒；低情商：昨晚没睡💭',
+  '高情商：你在成长；低情商：你被风教育了🌀',
+];
+
+const SHORT_EMOJIS = ['🌿', '✨', '🤔', '🤣', '😭', '🌈', '⚡', '🍂', '💧'];
+const slangRules = getSlangGlobalRules();
+
+const pickMemeTone = (sender: TreeAgent): '调皮' | '活泼' | '神启' | null => {
+  if (isDivineTree(sender)) return '神启';
+  if (sender.personality === '活泼') return '活泼';
+  if (sender.personality === '调皮' || sender.personality === '顽皮') return '调皮';
+  return null;
+};
+
+const ensureCompactLength = (line: string, min = 15, max = slangRules.max_length) => {
+  const chars = Array.from(line.trim());
+  if (chars.length > max) {
+    return `${chars.slice(0, max - 1).join('')}…`;
+  }
+  if (chars.length < min) {
+    const pad = randomIn(SHORT_EMOJIS);
+    const next = `${line}${pad}`;
+    if (Array.from(next).length < min) {
+      return `${next}${randomIn(SHORT_EMOJIS)}`;
+    }
+    return next;
+  }
+  return line;
+};
+
 /**
  * Social-chat generator with meme/gag injections.
  * Keeps base persona dialogue and occasionally adds internet-style abstract lines.
@@ -339,9 +615,31 @@ export function generateSocialChat(
   receiver: TreeAgent,
   context: DialogueContext & { echoText?: string; weather?: DialogueWeather } = {},
 ): string {
+  const envTrigger = getSlangEnvironmentalTrigger({
+    weather: context.weather,
+    season: context.season,
+  });
+  if (envTrigger && Math.random() < 0.35) {
+    return ensureCompactLength(envTrigger);
+  }
+
+  if (sender.personality === '活泼' && Math.random() < 0.38) {
+    return randomIn(LIVELY_ABSTRACT_GREETINGS);
+  }
+
+  if (sender.personality === '睿智' && Math.random() < 0.42) {
+    return randomIn(SAGE_EQ_COMPARE_LINES);
+  }
+
+  const personalityTemplates = getSlangTemplatesForPersonality(sender.personality);
+  if (personalityTemplates.length > 0 && Math.random() < 0.74) {
+    return ensureCompactLength(applyTreePersonaFlavor(sender, randomIn(personalityTemplates)));
+  }
+
   const baseLine = createCommunityDialogue(sender, receiver, context);
   const tone = resolveDialogueTone(sender.personality);
   const relation = getRelationType(sender, receiver);
+  const memeTone = pickMemeTone(sender);
 
   const gagPool: string[] = [];
   if (tone === '温柔' || context.weather === 'sunny') gagPool.push(SOCIAL_GAG_LIBRARY.xiaohongshu);
@@ -352,11 +650,17 @@ export function generateSocialChat(
   const baseChance = tone === '调皮' || tone === '活泼' ? 0.36 : 0.24;
   const gagChance = context.intimacy && context.intimacy >= 70 ? baseChance + 0.08 : baseChance;
 
-  if (gagPool.length > 0 && Math.random() < gagChance) {
-    return applyTreePersonaFlavor(sender, `${baseLine} ${randomIn(gagPool)}`);
+  const memeChance = memeTone === '神启' ? 0.44 : memeTone ? 0.5 : 0;
+  if (memeTone && Math.random() < memeChance) {
+    return ensureCompactLength(applyTreePersonaFlavor(sender, randomIn(INTERNET_MEME_DB[memeTone])));
   }
 
-  return applyTreePersonaFlavor(sender, baseLine);
+  if (gagPool.length > 0 && Math.random() < gagChance) {
+    return ensureCompactLength(applyTreePersonaFlavor(sender, `${baseLine} ${randomIn(gagPool)}`));
+  }
+
+  const withEmoji = Math.random() < 0.62 ? `${baseLine}${randomIn(SHORT_EMOJIS)}` : baseLine;
+  return ensureCompactLength(applyTreePersonaFlavor(sender, withEmoji));
 }
 
 export function resolveMemoryCue(sender: TreeAgent, receiver: TreeAgent, now = Date.now()): MemoryCueResult | null {

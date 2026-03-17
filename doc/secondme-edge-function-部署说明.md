@@ -3,8 +3,10 @@
 当前项目的 SecondMe 登录流程依赖 Supabase Edge Function：
 
 - 函数名：secondme-oauth-exchange
+- 函数名：secondme-tree-profiles
 - Supabase 项目 ref：giooyiclaivgxmedfljk
-- 作用：在服务端使用 Client Secret 完成授权码换 Token，并拉取用户信息
+- 作用 1：在服务端使用 Client Secret 完成授权码换 Token，并拉取用户信息
+- 作用 2：在服务端校验 SecondMe access token，并把树资料/聊天记录写入 Supabase
 
 如果这个函数没有部署，前端回调后会看到：
 
@@ -42,6 +44,7 @@ npx -y supabase link --project-ref giooyiclaivgxmedfljk
 - SECONDME_CLIENT_ID
 - SECONDME_CLIENT_SECRET
 - SECONDME_API_BASE_URL（可选，默认就是官方地址）
+- SUPABASE_SERVICE_ROLE_KEY（secondme-tree-profiles 必需）
 
 执行命令：
 
@@ -59,17 +62,30 @@ npx -y supabase secrets set --project-ref giooyiclaivgxmedfljk SECONDME_API_BASE
 
 - SECONDME_CLIENT_SECRET 是服务端密钥，不要放到前端代码里使用。
 - 即使 .env.local 里写了 SECONDME_CLIENT_SECRET，浏览器端也不会自动把它变成 Supabase Edge Function 的服务端变量。
+- SUPABASE_SERVICE_ROLE_KEY 也只能放在 Supabase 服务端 Secrets 中，不能暴露给前端。
+
+如果要把树资料真正持久化到云端，还需要额外执行：
+
+```powershell
+npx -y supabase secrets set --project-ref giooyiclaivgxmedfljk SUPABASE_SERVICE_ROLE_KEY="把你的 service_role key 填这里"
+```
+
+并在 Supabase SQL Editor 执行：
+
+- [supabase/tree_profiles_setup.sql](supabase/tree_profiles_setup.sql)
 
 ## 4. 部署 Edge Function
 
 这个项目已经包含函数源码：
 
 - [supabase/functions/secondme-oauth-exchange/index.ts](supabase/functions/secondme-oauth-exchange/index.ts)
+- [supabase/functions/secondme-tree-profiles/index.ts](supabase/functions/secondme-tree-profiles/index.ts)
 
 部署命令：
 
 ```powershell
 npx -y supabase functions deploy secondme-oauth-exchange --project-ref giooyiclaivgxmedfljk --no-verify-jwt
+npx -y supabase functions deploy secondme-tree-profiles --project-ref giooyiclaivgxmedfljk --no-verify-jwt
 ```
 
 这里加 --no-verify-jwt 的原因是：
@@ -86,6 +102,9 @@ npx -y supabase functions deploy secondme-oauth-exchange --project-ref giooyicla
 
 ```toml
 [functions.secondme-oauth-exchange]
+verify_jwt = false
+
+[functions.secondme-tree-profiles]
 verify_jwt = false
 ```
 
@@ -123,6 +142,14 @@ npx -y supabase secrets list --project-ref giooyiclaivgxmedfljk
 - token_exchange_failed
 - oauth2.client.secret_mismatch
 - missing_required_fields
+- SUPABASE_SERVICE_ROLE_KEY are required
+- invalid_secondme_session
+
+部署后如果 SQL 还没升级：
+
+- tree_profiles_upsert_failed
+- messages_upsert_failed
+- tree_chat_highlights_upsert_failed
 
 部署后如果 redirect_uri 不一致：
 

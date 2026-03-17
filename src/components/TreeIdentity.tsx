@@ -1,15 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useForestStore } from '@/stores/useForestStore';
 import { pickTreeIdentityGag } from '@/constants/treeGags';
+import DrawingPlayback from './DrawingPlayback';
+import type { DrawingData, SceneInteractionKind } from '@/types/forest';
 
 interface Props {
   agentId: string;
   name: string;
+  tag?: string;
   personality?: string;
   shapeId?: string;
   scale: number;
   hovered: boolean;
+  interactionPulseKind?: SceneInteractionKind | null;
+  interactionPulseToken?: number | null;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -41,29 +47,22 @@ const PERSONALITY_COLOR_DEEP: Record<string, string> = {
   神启: '#bf8d1f',
 };
 
+const PERSONALITY_TAGS: Record<string, string[]> = {
+  温柔: ['长期主义者', '佛系养生博主', '慢生活倡导人'],
+  睿智: ['清醒老巨人', '长期主义者', '根系智者'],
+  顽皮: ['脆皮大学生', '尊嘟假嘟', '全林最野的崽'],
+  活泼: ['脆皮大学生', '尊嘟假嘟', '全林最野的崽'],
+  社恐: ['i树人', '咸鱼树', '别点我报警了'],
+  神启: ['甲方爸爸的树', '这个树很City', '神性肃静'],
+};
+
 const ICON_EGG = ['♡', '💬', '✶'];
 
 const randomIn = <T,>(arr: readonly T[]) => arr[Math.floor(Math.random() * arr.length)];
+const hashSeed = (input: string) => Array.from(input).reduce((acc, char) => acc + char.charCodeAt(0), 0);
 
-const resolveTreeStage = (input: {
-  isManual: boolean;
-  generation?: number;
-  energy?: number;
-}) => {
-  if (input.isManual) {
-    return '次元主理树';
-  }
-
-  const generation = input.generation ?? 0;
-  const energy = input.energy ?? 50;
-
-  if (generation >= 3 || energy >= 92) return '古树顾问';
-  if (generation >= 2 || energy >= 78) return '林间前辈';
-  if (generation >= 1 || energy >= 62) return '青年树代表';
-  return '新芽见习生';
-};
-
-export default function TreeIdentity({ agentId, name, personality, shapeId, scale, hovered }: Props) {
+export default function TreeIdentity({ agentId, name, tag, personality, shapeId, scale, hovered, interactionPulseKind = null, interactionPulseToken = null }: Props) {
+  const navigate = useNavigate();
   const activeChat = useForestStore((state) => state.activeChat);
   const agents = useForestStore((state) => state.agents);
   const silenceUntil = useForestStore((state) => state.globalEffects.silenceUntil);
@@ -80,15 +79,14 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
   const primary = PERSONALITY_COLOR[tone] ?? '#7aa98d';
   const deep = PERSONALITY_COLOR_DEEP[tone] ?? '#5e8d72';
   const shapeTint = self?.shape?.colorPalette?.accent ?? self?.shape?.colorPalette?.leaves ?? `${primary}88`;
-  const stageTitle = resolveTreeStage({
-    isManual,
-    generation: self?.generation,
-    energy: self?.energy,
-  });
-  const [stageBoost, setStageBoost] = useState(false);
-  const prevStageRef = useRef<string | null>(null);
 
-  const displayName = (name || '无名树').replace(/\d+/g, '');
+  const displayName = name || '无名树';
+  const storedTag = tag ?? self?.tag ?? ((self?.metadata as { tag?: string } | undefined)?.tag);
+  const displayTag = useMemo(() => {
+    if (storedTag?.trim()) return storedTag.trim();
+    const tagPool = PERSONALITY_TAGS[tone] ?? PERSONALITY_TAGS['温柔'];
+    return tagPool[hashSeed(agentId || displayName) % tagPool.length];
+  }, [agentId, displayName, storedTag, tone]);
   const [identityGag, setIdentityGag] = useState(() =>
     pickTreeIdentityGag({
       personality: tone,
@@ -110,18 +108,13 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
     );
   }, [agentId, hovered, isManual, shapeId, tone]);
 
-  useEffect(() => {
-    const prevStage = prevStageRef.current;
-    prevStageRef.current = stageTitle;
-    if (!prevStage || prevStage === stageTitle) return;
-
-    setStageBoost(true);
-    const timer = window.setTimeout(() => setStageBoost(false), 1100);
-    return () => window.clearTimeout(timer);
-  }, [stageTitle]);
-
   const cardCompensationScale = clamp(1 / Math.max(scale, 0.01), 0.88, 2.2);
   const egg = useMemo(() => randomIn(ICON_EGG), []);
+  const [showPlayback, setShowPlayback] = useState(false);
+
+  const drawingData = useMemo(() => {
+    return self?.metadata?.drawingData as DrawingData | undefined;
+  }, [self?.metadata?.drawingData]);
 
   return (
     <div
@@ -146,10 +139,12 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.86, y: -8 }}
             transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+            onClick={() => navigate(`/tree/${agentId}`)}
             style={{
               width: 180,
               scale: cardCompensationScale,
               transformOrigin: 'bottom center',
+              cursor: 'pointer',
             }}
           >
             <div
@@ -208,22 +203,25 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
                 </motion.div>
               </div>
 
-              <motion.div
-                animate={stageBoost ? { scale: [1, 1.1, 1], opacity: [0.82, 1, 0.82] } : { scale: 1, opacity: 0.86 }}
-                transition={stageBoost ? { duration: 0.86, ease: 'easeInOut' } : { duration: 0.2 }}
-                style={{
-                  marginTop: 8,
-                  textAlign: 'center',
-                  fontFamily: 'var(--font-handwritten)',
-                  fontSize: 11,
-                  lineHeight: 1,
-                  color: stageBoost ? `${deep}ee` : `${deep}bb`,
-                  letterSpacing: '0.04em',
-                  textShadow: stageBoost ? `0 0 8px ${primary}66` : 'none',
-                }}
-              >
-                {stageTitle}
-              </motion.div>
+              {displayTag && (
+                <motion.div
+                  animate={isChatterbox ? { y: [0, -1, 0], opacity: [0.85, 1, 0.85] } : { scale: 1, opacity: 0.92 }}
+                  transition={isChatterbox ? { duration: 1.8, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }}
+                  style={{
+                    marginTop: 8,
+                    textAlign: 'center',
+                    fontFamily: 'var(--font-handwritten)',
+                    fontSize: 11,
+                    lineHeight: 1.2,
+                    color: deep,
+                    letterSpacing: '0.03em',
+                    display: 'block',
+                    width: '100%',
+                  }}
+                >
+                  {displayTag}
+                </motion.div>
+              )}
 
               {isChatterbox && (
                 <motion.div
@@ -251,14 +249,38 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
                 </motion.div>
               )}
 
+              {drawingData && (
+                <motion.button
+                  onClick={() => setShowPlayback(true)}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  style={{
+                    marginTop: isChatterbox ? 6 : 7,
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    border: `1px solid ${primary}66`,
+                    background: `${primary}11`,
+                    fontFamily: 'var(--font-handwritten)',
+                    fontSize: 11,
+                    color: deep,
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                  }}
+                  className="hover:bg-opacity-100 hover:shadow-md"
+                >
+                  🎬 回放绘画
+                </motion.button>
+              )}
+
               <div
                 style={{
                   marginTop: isChatterbox ? 6 : 7,
                   textAlign: 'center',
                   fontFamily: 'var(--font-handwritten)',
-                  fontSize: 14,
-                  lineHeight: 1.35,
-                  color: 'rgba(58, 64, 60, 0.9)',
+                  fontSize: 12,
+                  lineHeight: 1.3,
+                  color: 'rgba(72, 82, 76, 0.62)',
+                  letterSpacing: '0.01em',
                 }}
               >
                 {identityGag}
@@ -297,7 +319,9 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
 
       <motion.div
         animate={
-          isRecallingMemory
+          interactionPulseKind === 'prune' && interactionPulseToken
+            ? { scale: [1, 1.28, 0.9, 1.12, 1], rotate: [0, -10, 7, -4, 0], opacity: [0.82, 1, 0.9, 1] }
+            : isRecallingMemory
             ? { rotate: [0, 360], scale: [1, 1.1, 1], opacity: [0.62, 0.98, 0.62] }
             : isTalking
               ? { scale: [1, 1.2, 1], opacity: [0.6, 1, 0.6] }
@@ -306,7 +330,9 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
                 : { opacity: 0.64, scale: 1 }
         }
         transition={
-          isRecallingMemory
+          interactionPulseKind === 'prune' && interactionPulseToken
+            ? { duration: 0.72, ease: 'easeOut' }
+            : isRecallingMemory
             ? { duration: 2.6, repeat: Infinity, ease: 'linear' }
             : isTalking
               ? { duration: 1.45, repeat: Infinity, ease: 'easeInOut' }
@@ -327,6 +353,15 @@ export default function TreeIdentity({ agentId, name, personality, shapeId, scal
       >
         {symbol}
       </motion.div>
+
+      <AnimatePresence>
+        {showPlayback && drawingData && (
+          <DrawingPlayback
+            drawingData={drawingData}
+            onClose={() => setShowPlayback(false)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

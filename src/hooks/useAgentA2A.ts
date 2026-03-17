@@ -3,7 +3,7 @@ import { genVirtualInteractions, PERSONA_MATRIX, PersonaKey } from '@/constants/
 import { NarrativeMode, SocialState, SpeakingPace } from '@/types/forest';
 import { useForestStore } from '@/stores/useForestStore';
 import { getWorldEcologySocialMood, getWorldEcologyZone, inferWorldWidthFromPositions } from '@/lib/worldEcology';
-import { areBloodRelated, generateSocialChat, getRelationType, isAdult, isDivineTree, resolveMemoryCue } from '@/lib/treeSociety';
+import { RECENT_TOPIC_CONTINUATION_WINDOW_MS, buildRecentTopicContinuation, calculatePartnerCompatibility, classifySocialEvent, generateSocialChat, getRelationType, isDivineTree, resolveMemoryCue } from '@/lib/treeSociety';
 
 const randomIn = <T,>(arr: readonly T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
@@ -16,8 +16,25 @@ const nextSpeakerReadyAtByTree = new Map<string, number>();
 
 const SILENCE_RESCUE_MS = 3 * 60 * 1000; // 3 minutes idle triggers possible rescue
 const DIVINE_SURGE_CHAT_MULTIPLIER = 1.9;
-const DIVINE_SURGE_ADORATION_RANGE = 560;
+const DIVINE_ADORATION_RANGE = 420;
+const DIVINE_SURGE_ADORATION_RANGE = 680;
+const DIVINE_ADORATION_NEAREST_FALLBACK = 5;
+const DIVINE_SURGE_ADORATION_NEAREST_FALLBACK = 8;
+const DIVINE_ADORATION_RECENT_ACTIVITY_MS = 60_000;
+const DIVINE_ADORATION_RECENT_ACTIVITY_DAMPING = 0.38;
+const DIVINE_ADORATION_STRANGER_BOOST = 1.2;
+const DIVINE_ADORATION_FAMILIAR_DAMPING = 0.82;
 const CHATTERBOX_STARTER_BOOST = 1.95;
+const SHY_NEIGHBOR_STARTER_BOOST = 1.28;
+const SHY_NEIGHBOR_PLAYFUL_STARTER_BOOST = 1.14;
+const SHY_RECEIVER_LIVELY_BOOST = 1.72;
+const SHY_RECEIVER_PLAYFUL_BOOST = 1.36;
+const SHY_RECEIVER_RECENT_ACTIVITY_MS = 45_000;
+const SHY_RECEIVER_RECENT_ACTIVITY_DAMPING = 0.18;
+const SHY_RECEIVER_STRANGER_BOOST = 1.18;
+const SHY_RECEIVER_WARMUP_BOOST = 1.08;
+const SHY_RECEIVER_FAMILIAR_DAMPING = 0.72;
+const SHY_RECEIVER_INTIMACY_SOFT_CAP = 65;
 // Default to carnival mode: faster chat cadence and quicker turn-taking.
 const A2A_BASE_DELAY_MS = 2200;
 const A2A_DELAY_JITTER_MS = 4200;
@@ -38,6 +55,75 @@ const CROSS_ZONE_BRIDGES = [
   '原来另一片林子的节奏，是这样的。',
   '听起来像远处的天气也在靠近。',
 ];
+
+const CHAT_SHORT_MIN = 15;
+const HIGH_FREQ_EMOJIS = ['🌿', '✨', '💧', '🍂', '🤣', '😭', '🤔', '⚡', '🌈'];
+
+const getA2ADialoguePolicy = (personality: string) => {
+  if (personality === '社恐') {
+    return { maxLength: 5, fallback: ['嗯。', '好。', '在。', '收到。', '别急。'] };
+  }
+  if (personality === '活泼' || personality === '调皮' || personality === '顽皮') {
+    return { maxLength: 200, fallback: ['我真的有很多想法想一口气告诉你。', '这件事我越说越觉得有意思。'] };
+  }
+  return { maxLength: 50, fallback: ['我听明白了，我们继续。', '这件事可以慢慢说。'] };
+};
+
+const sanitizeA2AMessage = (message?: string | null) => {
+  if (typeof message !== 'string') return '';
+  return message
+    .replace(/\bundefined\b/gi, '')
+    .replace(/\bnull\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const currentSeason = (): 'spring' | 'summer' | 'autumn' | 'winter' => {
+  const month = new Date().getMonth() + 1;
+  if (month >= 3 && month <= 5) return 'spring';
+  if (month >= 6 && month <= 8) return 'summer';
+  if (month >= 9 && month <= 11) return 'autumn';
+  return 'winter';
+};
+
+const compactA2AMessage = (message: string, personality: string) => {
+  const policy = getA2ADialoguePolicy(personality);
+  const trimmed = sanitizeA2AMessage(message);
+  const chars = Array.from(trimmed);
+
+  let out = trimmed || randomIn(policy.fallback);
+  if (chars.length > policy.maxLength) {
+    const sentences = trimmed.match(/[^。！？!?]+[。！？!?]?/g)?.map((entry) => entry.trim()).filter(Boolean) ?? [];
+    let picked = '';
+    for (const sentence of sentences) {
+      if (Array.from(`${picked}${sentence}`).length > policy.maxLength) break;
+      picked += sentence;
+    }
+    out = picked || randomIn(policy.fallback);
+  }
+
+  const shouldEmojiBoost = personality === '活泼' || personality === '调皮' || personality === '顽皮' || personality === '神启';
+  const hasEmoji = /[\u{1F300}-\u{1FAFF}]/u.test(out);
+  if (policy.maxLength > 5 && (shouldEmojiBoost || Math.random() < 0.65) && !hasEmoji) {
+    out = `${out}${randomIn(HIGH_FREQ_EMOJIS)}`;
+  }
+
+  if (policy.maxLength > 5 && Array.from(out).length < CHAT_SHORT_MIN) {
+    out = `${out}${randomIn(HIGH_FREQ_EMOJIS)}`;
+  }
+
+  if (Array.from(out).length > policy.maxLength) {
+    const sentences = out.match(/[^。！？!?]+[。！？!?]?/g)?.map((entry) => entry.trim()).filter(Boolean) ?? [];
+    let picked = '';
+    for (const sentence of sentences) {
+      if (Array.from(`${picked}${sentence}`).length > policy.maxLength) break;
+      picked += sentence;
+    }
+    out = picked || randomIn(policy.fallback);
+  }
+
+  return out;
+};
 
 const RELATION_STORY_BEATS: Record<'partner' | 'family' | 'friend' | 'stranger', string[]> = {
   partner: [
@@ -145,6 +231,121 @@ const getStarterWeight = (
   return baseWeight * chatterboxBoost * personalityRate;
 };
 
+const isShyTree = (personality?: string) => personality === '社恐';
+const isLivelyTree = (personality?: string) => personality === '活泼';
+const isPlayfulTree = (personality?: string) => personality === '调皮' || personality === '顽皮';
+
+export const getStarterSelectionWeight = (
+  agent: {
+    id: string;
+    neighbors: string[];
+    position: { x: number };
+    personality?: string;
+    metadata?: { chatterbox?: boolean; speakingPace?: SpeakingPace };
+    intimacyMap?: Record<string, number>;
+    socialCircle?: { family: string[]; partner: string | null };
+  },
+  idToAgent: Map<string, { id: string; personality?: string; socialState: SocialState }>,
+  worldWidth: number,
+) => {
+  const baseWeight = getStarterWeight(agent, worldWidth);
+  const hasIdleShyNeighbor = agent.neighbors.some((neighborId) => {
+    const neighbor = idToAgent.get(neighborId);
+    if (!neighbor || neighbor.socialState !== SocialState.IDLE || !isShyTree(neighbor.personality)) return false;
+    if (agent.socialCircle?.partner === neighborId) return false;
+    if (agent.socialCircle?.family.includes(neighborId)) return false;
+    return (agent.intimacyMap?.[neighborId] ?? 0) < SHY_RECEIVER_INTIMACY_SOFT_CAP;
+  });
+
+  if (!hasIdleShyNeighbor) return baseWeight;
+  if (isLivelyTree(agent.personality)) return baseWeight * SHY_NEIGHBOR_STARTER_BOOST;
+  if (isPlayfulTree(agent.personality)) return baseWeight * SHY_NEIGHBOR_PLAYFUL_STARTER_BOOST;
+  return baseWeight;
+};
+
+export const getReceiverSelectionWeight = (
+  sender: {
+    personality?: string;
+    intimacyMap?: Record<string, number>;
+    socialCircle?: { friends: string[]; family: string[]; partner: string | null };
+  },
+  receiver: { id: string; personality?: string; position: { x: number } },
+  worldWidth: number,
+  now: number,
+  lastActiveAt?: number,
+) => {
+  let weight = getWorldEcologySocialMood(receiver.position.x, worldWidth).conversationWeight;
+  const senderTargetsShyMore = isLivelyTree(sender.personality) || isPlayfulTree(sender.personality);
+
+  if (senderTargetsShyMore && isShyTree(receiver.personality)) {
+    weight *= isLivelyTree(sender.personality) ? SHY_RECEIVER_LIVELY_BOOST : SHY_RECEIVER_PLAYFUL_BOOST;
+
+    const intimacy = sender.intimacyMap?.[receiver.id] ?? 0;
+    const isPartner = sender.socialCircle?.partner === receiver.id;
+    const isFamily = sender.socialCircle?.family.includes(receiver.id) ?? false;
+    const isFriend = sender.socialCircle?.friends.includes(receiver.id) ?? intimacy >= 65;
+
+    if (isPartner || isFamily) {
+      weight *= SHY_RECEIVER_FAMILIAR_DAMPING * 0.7;
+    } else if (!isFriend && intimacy < 30) {
+      weight *= SHY_RECEIVER_STRANGER_BOOST;
+    } else if (!isFriend && intimacy < SHY_RECEIVER_INTIMACY_SOFT_CAP) {
+      weight *= SHY_RECEIVER_WARMUP_BOOST;
+    } else {
+      weight *= SHY_RECEIVER_FAMILIAR_DAMPING;
+    }
+
+    if (typeof lastActiveAt === 'number' && now - lastActiveAt < SHY_RECEIVER_RECENT_ACTIVITY_MS) {
+      weight *= SHY_RECEIVER_RECENT_ACTIVITY_DAMPING;
+    }
+  }
+
+  return weight;
+};
+
+export const getDivineAdorationCandidateWeight = (
+  candidate: {
+    id: string;
+    personality?: string;
+    position: { x: number; y: number };
+    intimacyMap?: Record<string, number>;
+    socialCircle?: { friends: string[]; family: string[]; partner: string | null };
+    metadata?: { chatterbox?: boolean; speakingPace?: SpeakingPace };
+  },
+  manualTree: {
+    id: string;
+    position: { x: number; y: number };
+  },
+  worldWidth: number,
+  now: number,
+  lastActiveAt?: number,
+) => {
+  const baseWeight = getStarterWeight(candidate, worldWidth);
+  const distance = Math.hypot(candidate.position.x - manualTree.position.x, candidate.position.y - manualTree.position.y);
+  const range = DIVINE_SURGE_ADORATION_RANGE;
+  const distanceBias = 0.45 + Math.max(0.18, 1 - distance / range);
+  const candidateZone = getWorldEcologyZone(candidate.position.x, worldWidth).id;
+  const manualZone = getWorldEcologyZone(manualTree.position.x, worldWidth).id;
+  const sameZoneBoost = candidateZone === manualZone ? 1.14 : 0.96;
+  const intimacy = candidate.intimacyMap?.[manualTree.id] ?? 0;
+  const isPartner = candidate.socialCircle?.partner === manualTree.id;
+  const isFamily = candidate.socialCircle?.family.includes(manualTree.id) ?? false;
+  const isFriend = candidate.socialCircle?.friends.includes(manualTree.id) ?? intimacy >= 65;
+
+  let relationBias = 1;
+  if (!isFriend && intimacy < 30) relationBias *= DIVINE_ADORATION_STRANGER_BOOST;
+  else if (isPartner || isFamily) relationBias *= DIVINE_ADORATION_FAMILIAR_DAMPING * 0.78;
+  else if (isFriend) relationBias *= DIVINE_ADORATION_FAMILIAR_DAMPING;
+
+  let weight = baseWeight * distanceBias * sameZoneBoost * relationBias;
+
+  if (typeof lastActiveAt === 'number' && now - lastActiveAt < DIVINE_ADORATION_RECENT_ACTIVITY_MS) {
+    weight *= DIVINE_ADORATION_RECENT_ACTIVITY_DAMPING;
+  }
+
+  return weight;
+};
+
 const resolveSpeakingPace = (agent: { personality?: string; metadata?: { chatterbox?: boolean; speakingPace?: SpeakingPace } }): SpeakingPace => {
   if (agent.metadata?.speakingPace) return agent.metadata.speakingPace;
   if (agent.metadata?.chatterbox) return 'chatterbox';
@@ -230,6 +431,7 @@ export function useAgentA2A() {
               listenerId: target.id,
               message: rescueLine,
               type: 'chat',
+              source: 'auto',
               likes,
               comments,
               isTrending: false,
@@ -244,19 +446,27 @@ export function useAgentA2A() {
 
       const manualTree = [...agents].reverse().find((agent) => agent.isManual);
       if (manualTree && manualTree.socialState === SocialState.IDLE) {
-        const adorationRange = divineSurgeActive ? DIVINE_SURGE_ADORATION_RANGE : ADORATION_DETECTION_RANGE;
-        const adorationCandidates = agents.filter((agent) => {
-          if (agent.id === manualTree.id || agent.isManual) return false;
-          if (agent.socialState !== SocialState.IDLE) return false;
-          if (!isSpeakerReady(agent, now)) return false;
-          const distance = Math.hypot(agent.position.x - manualTree.position.x, agent.position.y - manualTree.position.y);
-          return distance <= adorationRange;
-        });
+        const adorationRange = divineSurgeActive ? DIVINE_SURGE_ADORATION_RANGE : DIVINE_ADORATION_RANGE;
+        const nearestFallbackCount = divineSurgeActive ? DIVINE_SURGE_ADORATION_NEAREST_FALLBACK : DIVINE_ADORATION_NEAREST_FALLBACK;
+        const adorationCandidates = agents
+          .filter((agent) => {
+            if (agent.id === manualTree.id || agent.isManual) return false;
+            if (agent.socialState !== SocialState.IDLE) return false;
+            if (!isSpeakerReady(agent, now)) return false;
+            return !isDivineTree(agent);
+          })
+          .map((agent) => ({
+            agent,
+            distance: Math.hypot(agent.position.x - manualTree.position.x, agent.position.y - manualTree.position.y),
+          }))
+          .sort((left, right) => left.distance - right.distance)
+          .filter((entry, index) => entry.distance <= adorationRange || index < nearestFallbackCount)
+          .map((entry) => entry.agent);
 
         if (adorationCandidates.length > 0) {
           agentA = randomWeighted(
             adorationCandidates,
-            (agent) => getStarterWeight(agent, worldWidth),
+            (agent) => getDivineAdorationCandidateWeight(agent, manualTree, worldWidth, now, lastActiveByTree.get(agent.id)),
           );
           agentB = manualTree;
         }
@@ -274,7 +484,7 @@ export function useAgentA2A() {
 
         agentA = randomWeighted(
           starters,
-          (agent) => getStarterWeight(agent, worldWidth),
+          (agent) => getStarterSelectionWeight(agent, idToAgent, worldWidth),
         );
         const possibleReceivers = agentA.neighbors
           .map((id) => idToAgent.get(id))
@@ -290,7 +500,7 @@ export function useAgentA2A() {
 
         agentB = randomWeighted(
           possibleReceivers,
-          (agent) => getWorldEcologySocialMood(agent.position.x, worldWidth).conversationWeight,
+          (agent) => getReceiverSelectionWeight(agentA, agent, worldWidth, now, lastActiveByTree.get(agent.id)),
         );
       }
       const zoneA = getWorldEcologyZone(agentA.position.x, worldWidth);
@@ -300,6 +510,8 @@ export function useAgentA2A() {
       const divinePair = isDivineTree(agentA) || isDivineTree(agentB);
       const conversationWeather = store.globalEffects.conversationWeather;
       const narrativeMode = store.globalEffects.narrativeMode;
+      const intimacyBefore = Math.max(agentA.intimacyMap[agentB.id] ?? 0, agentB.intimacyMap[agentA.id] ?? 0);
+      const compatibilityBefore = calculatePartnerCompatibility(agentA, agentB, idToAgent, worldWidth).total;
 
       store.changeIntimacy(agentA.id, agentB.id, relationGain);
 
@@ -308,16 +520,11 @@ export function useAgentA2A() {
       const nextA = refreshedMap.get(agentA.id) ?? agentA;
       const nextB = refreshedMap.get(agentB.id) ?? agentB;
       const intimacy = nextA.intimacyMap[nextB.id] ?? 0;
+      const compatibilityAfter = calculatePartnerCompatibility(nextA, nextB, refreshedMap, worldWidth);
 
       const canConfess =
         !divinePair
-        &&
-        intimacy >= 90
-        && isAdult(nextA)
-        && isAdult(nextB)
-        && !areBloodRelated(nextA, nextB, refreshedMap)
-        && (!nextA.socialCircle.partner || nextA.socialCircle.partner === nextB.id)
-        && (!nextB.socialCircle.partner || nextB.socialCircle.partner === nextA.id);
+        && compatibilityAfter.eligibleForPartner;
 
       if (canConfess && nextA.socialCircle.partner !== nextB.id) {
         store.setPartner(nextA.id, nextB.id);
@@ -327,17 +534,28 @@ export function useAgentA2A() {
       const pairKey = [nextA.id, nextB.id].sort().join('|');
       const recentConv = lastConvByPair.get(pairKey);
       const echoText =
-        recentConv && Date.now() - recentConv.time < 5 * 60 * 1000
+        recentConv && Date.now() - recentConv.time < RECENT_TOPIC_CONTINUATION_WINDOW_MS
           ? recentConv.message
           : undefined;
 
-      const baseMessage = generateSocialChat(nextA, nextB, {
-        weather: conversationWeather,
-        intimacy,
-        echoText,
-      });
-
       const memoryCue = resolveMemoryCue(nextA, nextB);
+      const recentTopic = memoryCue?.topic || (echoText ? (nextB.memory.lastTopic || nextA.memory.lastTopic || '森林') : '');
+      const shouldPrioritizeRecentTopic = Boolean(
+        memoryCue?.mode === 'continuation'
+        || (echoText && recentTopic),
+      );
+      const baseMessage = shouldPrioritizeRecentTopic
+        ? buildRecentTopicContinuation(nextA, nextB, {
+            topic: recentTopic || '森林',
+            echoText,
+            intimacy,
+          })
+        : generateSocialChat(nextA, nextB, {
+            weather: conversationWeather,
+            season: currentSeason(),
+            intimacy,
+            echoText,
+          });
       const memoryLead = memoryCue ? `${nextB.name}：${memoryCue.line}` : null;
       const maybeFeedback =
         relation !== 'stranger' && Math.random() < (narrativeMode === 'dramatic' ? 0.68 : 0.52)
@@ -363,11 +581,12 @@ export function useAgentA2A() {
       const composedMessage = shySpeaker
         ? [stitchedMessage, Math.random() < 0.24 ? storyBeat : null].filter(Boolean).join(' ')
         : [stitchedMessage, relationArcBeat, storyBeat, zoneTail].filter(Boolean).join(' ');
-      const message = canConfess
+      const rawMessage = canConfess
         ? `家人们他问我愿不愿意！！！${stitchedMessage} 😭✨`
         : divinePair
           ? stitchedMessage
           : composedMessage;
+      const message = compactA2AMessage(rawMessage, nextA.personality);
 
       // Update echo relay record
       lastConvByPair.set(pairKey, { message, time: Date.now() });
@@ -377,9 +596,18 @@ export function useAgentA2A() {
       lastActiveByTree.set(nextB.id, Date.now());
       markSpeakerSpoken(nextA, Date.now());
 
-      // Trending: manual tree conversations get the trending badge
-      const isTrending = nextA.isManual || nextB.isManual;
       const { likes, comments } = genVirtualInteractions(nextA.personality);
+      const eventClassification = classifySocialEvent({
+        likes,
+        comments,
+        crossZone: zoneA.id !== zoneB.id,
+        intimacyBefore,
+        intimacyAfter: intimacy,
+        compatibilityBefore,
+        compatibilityAfter: compatibilityAfter.total,
+        hasDivineTree: divinePair,
+        hasRecentTopicEcho: shouldPrioritizeRecentTopic,
+      });
 
       if (isDivineTree(nextA) && !isDivineTree(nextB)) {
         store.setGrowthBoostFor(nextB.id, 1.1);
@@ -407,10 +635,11 @@ export function useAgentA2A() {
         speakerId: agentA.id,
         listenerId: agentB.id,
         message,
-        type: divinePair ? 'epic' : 'chat',
+        type: eventClassification.type,
+        source: 'auto',
         likes,
         comments,
-        isTrending,
+        isTrending: eventClassification.isTrending,
       });
 
       const talkingDuration = divineSurgeActive ? A2A_TALKING_DURATION_DIVINE_MS : A2A_TALKING_DURATION_MS;

@@ -5,6 +5,38 @@ import { getWorldEcologySocialMood, inferWorldWidthFromPositions } from '@/lib/w
 
 const TRANSITION_MS = 3000;
 
+// 全局跟踪用户是否有过交互
+let audioContextUserInteractionFlag = false;
+
+const ensureAudioContextUnlocked = async (audioContext: AudioContext) => {
+  if (audioContext.state === 'running') return;
+  
+  // 尝试恢复，如果因为缺少user gesture而失败，会在第一次user interaction时自动恢复
+  try {
+    await audioContext.resume();
+  } catch (error) {
+    // NotAllowedError: AudioContext 必须由用户交互触发
+    // 我们稍后会在user interaction时重试
+  }
+  
+  // 如果还没有添加user interaction监听器，现在添加
+  if (!audioContextUserInteractionFlag) {
+    const resumeOnInteraction = () => {
+      if (audioContext.state === 'suspended') {
+        void audioContext.resume();
+      }
+      document.removeEventListener('click', resumeOnInteraction);
+      document.removeEventListener('keydown', resumeOnInteraction);
+      document.removeEventListener('touchstart', resumeOnInteraction);
+      audioContextUserInteractionFlag = true;
+    };
+    
+    document.addEventListener('click', resumeOnInteraction, { once: true });
+    document.addEventListener('keydown', resumeOnInteraction, { once: true });
+    document.addEventListener('touchstart', resumeOnInteraction, { once: true });
+  }
+};
+
 export function useForestEcology() {
   const agents = useForestStore((state) => state.agents);
   const talkingAgents = useMemo(
@@ -74,7 +106,7 @@ export function useForestEcology() {
 
     if (shouldEnhance) {
       const audioContext = ensureAudioContext();
-      void audioContext.resume();
+      void ensureAudioContextUnlocked(audioContext);
 
       if (!fluteOscRef.current || !fluteGainRef.current) {
         const osc = audioContext.createOscillator();

@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { WeatherType } from '@/components/Particles';
-import { useTimeTheme, type TimeMode } from '@/hooks/useTimeTheme';
+import { useTimeTheme, type TimeMode, type TimeTheme } from '@/hooks/useTimeTheme';
 import ParallaxBackground from '@/components/ParallaxBackground';
 import Particles from '@/components/Particles';
 import SeedButton from '@/components/SeedButton';
@@ -16,17 +16,20 @@ import PlantingGhost from '@/components/PlantingGhost';
 import AgentLink from '@/components/AgentLink';
 import ChatPanel from '@/components/ChatPanel';
 import BgmMushroom from '@/components/BgmMushroom';
+import { useBgmAudio } from '@/components/BgmAudioProvider';
+import { toast } from '@/hooks/use-toast';
 import TreeSpeciesPanel from '@/components/TreeSpeciesPanel';
 import CelestialCelebration from '@/components/CelestialCelebration';
 import ForestLoginModal from '@/components/ForestLoginModal';
 import { getTreeDepthMetrics } from '@/lib/treeDepth';
 import { useForestStore } from '@/stores/useForestStore';
-import { ChatHistoryEntry, SceneTreeSnapshot } from '@/types/forest';
+import { ChatHistoryEntry, SceneInteractionEvent, SceneTreeSnapshot, SocialState } from '@/types/forest';
 import { useAgentA2A } from '@/hooks/useAgentA2A';
 import { useForestEcology } from '@/hooks/useForestEcology';
 import { useAutoPlanting, renderTreeShapeToDataUrl } from '@/hooks/useAutoPlanting';
 import { generateRandomProfile } from '@/lib/agentProfile';
 import { generateClusteredTrees } from '@/lib/forestClusters';
+import { fetchAllTreeProfiles, saveConversationMessage, saveRelationshipEvent, saveTreeChatHighlight, saveTreeGrowthEvent, upsertTreeEngagementEvent, upsertTreeProfile } from '@/lib/treeProfileRepository';
 import {
   buildSecondMeAuthorizeUrl,
   clearSecondMeCallbackParams,
@@ -37,8 +40,28 @@ import {
   readSecondMeCallbackParams,
   saveSecondMeSession,
 } from '@/lib/secondmeAuth';
+import { inferPersonalityFromTags } from '@/lib/secondmePersonalityMapping';
 import { supabase } from '@/lib/supabase';
+import { getAgentGrowthStage } from '@/lib/treeGrowth';
+import { buildRecentU2AHistory, buildTreePersonaSystemMessage, type TreeRuntimeHistoryMessage } from '@/lib/treePersonaRuntime';
 import { getWorldEcologyAtmosphere, getWorldEcologyZone, pickShapeByWorldEcology } from '@/lib/worldEcology';
+
+// BGM 自动播放拦截 Toast 组件
+function BgmAutoplayBlockedToast() {
+  const bgmAudio = useBgmAudio();
+  useEffect(() => {
+    if (!bgmAudio?.isAutoplayBlocked) return;
+    const t = toast({
+      title: '🌿 森林之声正在等待唤醒',
+      description: '点击森林任意处，唤醒自然之声',
+      duration: 8000,
+    });
+    return () => {
+      t.dismiss();
+    };
+  }, [bgmAudio?.isAutoplayBlocked]);
+  return null;
+}
 
 interface TreeData {
   id: string;
@@ -67,7 +90,239 @@ const SECONDME_REDIRECT_URI = import.meta.env.VITE_SECONDME_REDIRECT_URI?.trim()
 const SECONDME_RESPONSE_TYPE = import.meta.env.VITE_SECONDME_RESPONSE_TYPE?.trim() ?? 'code';
 const SECONDME_SCOPE = import.meta.env.VITE_SECONDME_SCOPE?.trim() ?? 'user.info chat';
 const SECONDME_CLIENT_ID = import.meta.env.VITE_SECONDME_CLIENT_ID?.trim() ?? '';
+const SECONDME_API_BASE_URL = import.meta.env.VITE_SECONDME_API_BASE_URL?.trim() ?? 'https://api.mindverse.com/gate/lab';
 const SECONDME_DEV_EXCHANGE_PATH = '/api/secondme/oauth/exchange';
+const SECONDME_CHAT_TIMEOUT_MS = 18000;
+const SECONDME_STREAM_MODEL = 'google_ai_studio/gemini-2.0-flash';
+const SECONDME_TREE_SESSION_STORAGE_KEY = 'secondme.chat.sessions.byTree';
+const FOREST_CHAT_USER_ID = '__forest_user__';
+const TREE_SHAKE_MULTI_CLICK_WINDOW_MS = 1600;
+const TREE_SHAKE_TRIGGER_COUNT = 2;
+const TREE_SHAKE_PROMPT_COOLDOWN_MS = 2200;
+
+const TIME_LABEL_BY_THEME: Record<string, string> = {
+  dawn: '晨',
+  day: '昼',
+  dusk: '暮',
+  night: '夜',
+};
+
+const PERSONALITY_TIMEOUT_REPLY: Record<string, string[]> = {
+  温柔: ['森林里的风太大了，我没听清，能再说一遍吗？', '刚刚那阵风把字叶吹散了，你愿意慢慢再说一次吗？'],
+  睿智: ['森林里的风太大了，我没听清，能再说一遍吗？', '我捕捉到一半线索，剩下的请你再说一次。'],
+  顽皮: ['森林里的风太大了，我没听清，能再说一遍吗？', '风把答案偷走了，再给我一次机会？'],
+  活泼: ['森林里的风太大了，我没听清，能再说一遍吗？', '等等等等，风声太吵了，你再喊我一次！'],
+  社恐: ['森林里的风太大了，我没听清，能再说一遍吗？', '对不起，我刚刚有点慌，你能慢一点说吗？'],
+  神启: ['森林里的风太大了，我没听清，能再说一遍吗？', '天幕扰动，神谕断线，请再唤我一次。'],
+};
+
+type SoftMemoryItem = {
+  id?: number;
+  factObject?: string;
+  factContent?: string;
+  updateTime?: number;
+};
+
+type TreeLlmPayload = {
+  userInput: string;
+  treeName: string;
+  treePersonality: string;
+  forestSeason: string;
+  forestTime: string;
+  softMemorySnippets: string[];
+  systemPrompt: string;
+  historyMessages: TreeRuntimeHistoryMessage[];
+};
+
+type TreeChatSessionMap = Record<string, string>;
+
+const resolveTreeSessionStorageKey = (userId?: string | null) => {
+  if (!userId) return SECONDME_TREE_SESSION_STORAGE_KEY;
+  return `${SECONDME_TREE_SESSION_STORAGE_KEY}:${userId}`;
+};
+
+const loadTreeChatSessions = (userId?: string | null): TreeChatSessionMap => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const scopedKey = resolveTreeSessionStorageKey(userId);
+    const raw = localStorage.getItem(scopedKey);
+    if (raw) {
+      const parsed = JSON.parse(raw) as TreeChatSessionMap;
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+
+    // Backward compatibility: migrate old single-key storage to user-scoped key.
+    if (userId) {
+      const legacyRaw = localStorage.getItem(SECONDME_TREE_SESSION_STORAGE_KEY);
+      if (legacyRaw) {
+        const legacyParsed = JSON.parse(legacyRaw) as TreeChatSessionMap;
+        if (legacyParsed && typeof legacyParsed === 'object') {
+          localStorage.setItem(scopedKey, JSON.stringify(legacyParsed));
+          return legacyParsed;
+        }
+      }
+    }
+
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as TreeChatSessionMap;
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+};
+
+const saveTreeChatSessions = (sessions: TreeChatSessionMap, userId?: string | null) => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(resolveTreeSessionStorageKey(userId), JSON.stringify(sessions));
+  } catch {
+    // Ignore storage quota and private-mode write failures.
+  }
+};
+
+// ── Manual tree persistence ──────────────────────────────────────────────────
+const FOREST_MANUAL_TREES_KEY = 'forest.manual_trees';
+const resolveManualTreesStorageKey = (userId?: string | null) =>
+  userId ? `${FOREST_MANUAL_TREES_KEY}:${userId}` : FOREST_MANUAL_TREES_KEY;
+
+interface PersistedManualTreeEntry {
+  id: string;
+  imageData: string;
+  x: number;        // TreeData.x  (worldX - size/2)
+  y: number;        // TreeData.y  (worldY - size)
+  size: number;
+  worldX: number;   // agent.position.x
+  worldY: number;   // agent.position.y
+  name: string;
+  tag?: string;
+  personality: string;
+  bio: string;
+  lastWords: string;
+  energy: number;
+  generation: number;
+  parents: string[];
+  socialCircle: { friends: string[]; family: string[]; partner: string | null };
+  intimacyMap: Record<string, number>;
+  shape?: import('@/types/forest').TreeAgent['shape'];
+}
+
+const loadManualTrees = (userId?: string | null): PersistedManualTreeEntry[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(resolveManualTreesStorageKey(userId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as PersistedManualTreeEntry[]) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveManualTrees = (entries: PersistedManualTreeEntry[], userId?: string | null) => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(resolveManualTreesStorageKey(userId), JSON.stringify(entries));
+  } catch {
+    // Ignore storage quota and private-mode write failures.
+  }
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
+const toReadableForestTime = (theme: TimeMode | string) => TIME_LABEL_BY_THEME[theme] ?? String(theme);
+
+const pickTimeoutReply = (personality: string) => {
+  const pool = PERSONALITY_TIMEOUT_REPLY[personality] ?? PERSONALITY_TIMEOUT_REPLY['温柔'];
+  return pool[Math.floor(Math.random() * pool.length)];
+};
+
+const createMessageId = (prefix: string) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+
+type TypewriterState = {
+  text: string;
+  queue: string[];
+  done: boolean;
+  timerId: number | null;
+  waiters: Array<(value: string) => void>;
+};
+
+type DialoguePolicy = {
+  maxLength: number;
+  toneInstruction: string;
+  localReplies: string[];
+};
+
+const getDialoguePolicy = (personality: string): DialoguePolicy => {
+  if (personality === '社恐') {
+    return {
+      maxLength: 5,
+      toneInstruction: '回复极短，只说 1 句，1-5 个字，不要展开解释。',
+      localReplies: ['嗯。', '好。', '在。', '收到。', '别急。'],
+    };
+  }
+
+  if (personality === '活泼' || personality === '顽皮' || personality === '调皮') {
+    return {
+      maxLength: 200,
+      toneInstruction: '回复可以较长，但必须是一段完整、语义通顺的话，禁止输出被截断的半句话、undefined 或 null。',
+      localReplies: [
+        '你这句话我接得可认真了，我刚刚顺着风想了好几圈，感觉这事不只是在聊天，像是在给今天的森林补一层会发光的注脚。你要是愿意，我可以沿着这个念头继续陪你往下说。',
+        '我已经把你的话抱进枝叶里了，说真的，这个问题越想越有意思。它不只是眼前这一件小事，还连着情绪、天气和我们此刻的关系，所以我想慢一点、完整一点地回应你。',
+      ],
+    };
+  }
+
+  return {
+    maxLength: 50,
+    toneInstruction: '回复控制在 1-2 个完整句子内，语义完整，不要被截断。',
+    localReplies: [
+      '我听见你了，这句话我会认真收好。',
+      '你的意思我明白了，我在这里陪你接着聊。',
+      '这件事我先替你记下，我们慢慢说。',
+    ],
+  };
+};
+
+const sanitizeDialogueText = (message?: string | null) => {
+  if (typeof message !== 'string') return '';
+  return message
+    .replace(/\bundefined\b/gi, '')
+    .replace(/\bnull\b/gi, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const fitDialogueToPolicy = (message: string, personality: string) => {
+  const policy = getDialoguePolicy(personality);
+  const clean = sanitizeDialogueText(message);
+  const fallback = policy.localReplies[Math.floor(Math.random() * policy.localReplies.length)];
+  if (!clean) return fallback;
+
+  const chars = Array.from(clean);
+  if (chars.length <= policy.maxLength) return clean;
+
+  const sentences = clean.match(/[^。！？!?]+[。！？!?]?/g)?.map((entry) => entry.trim()).filter(Boolean) ?? [];
+  let picked = '';
+  for (const sentence of sentences) {
+    if (Array.from(`${picked}${sentence}`).length > policy.maxLength) break;
+    picked += sentence;
+  }
+
+  if (picked) return picked;
+  if (policy.maxLength <= 5) return fallback;
+
+  let clipped = chars.slice(0, policy.maxLength).join('').trim();
+  const softBreaks = ['。', '！', '？', '，', '、', ',', '；', ';', '：', ':'];
+  const lastBreak = Math.max(...softBreaks.map((token) => clipped.lastIndexOf(token)));
+  if (lastBreak >= Math.max(0, clipped.length - 12)) {
+    clipped = clipped.slice(0, lastBreak + 1).trim();
+  }
+  if (!/[。！？!?]$/.test(clipped)) {
+    clipped = `${clipped.replace(/[，、,；;：:]$/, '')}。`;
+  }
+  return clipped;
+};
 
 function mapAuthErrorMessage(message: string): string {
   const source = message.toLowerCase();
@@ -87,6 +342,8 @@ function mapAuthErrorMessage(message: string): string {
 }
 
 type SeasonMode = 'spring' | 'summer' | 'autumn' | 'winter' | 'auto';
+type ResolvedSeason = Exclude<SeasonMode, 'auto'>;
+type WeatherMode = WeatherType | 'auto';
 
 const seasonOptions: Array<{ value: SeasonMode; label: string; icon: string }> = [
   { value: 'auto',   label: '自动', icon: '🌀' },
@@ -96,7 +353,8 @@ const seasonOptions: Array<{ value: SeasonMode; label: string; icon: string }> =
   { value: 'winter', label: '冬',   icon: '❄️' },
 ];
 
-const weatherOptions: Array<{ value: WeatherType; label: string; icon: string }> = [
+const weatherOptions: Array<{ value: WeatherMode; label: string; icon: string }> = [
+  { value: 'auto',  label: '自动', icon: '🌀' },
   { value: 'sunny', label: '晴', icon: '☀️' },
   { value: 'rain',  label: '雨', icon: '🌧️' },
   { value: 'snow',  label: '雪', icon: '❄️' },
@@ -122,7 +380,7 @@ const chipBaseStyle: CSSProperties = {
   color: 'hsl(28, 24%, 28%)',
 };
 
-const resolveSeason = (season: SeasonMode): Exclude<SeasonMode, 'auto'> => {
+const resolveSeason = (season: SeasonMode): ResolvedSeason => {
   if (season !== 'auto') return season;
   const month = new Date().getMonth() + 1;
   if (month >= 3 && month <= 5) return 'spring';
@@ -131,7 +389,20 @@ const resolveSeason = (season: SeasonMode): Exclude<SeasonMode, 'auto'> => {
   return 'winter';
 };
 
-const seasonLayerFilterMap: Record<Exclude<SeasonMode, 'auto'>, string> = {
+const resolveWeather = (weather: WeatherMode, season: ResolvedSeason, timeTheme: TimeTheme): WeatherType => {
+  if (weather !== 'auto') return weather;
+  if (season === 'winter') return 'snow';
+
+  const hour = new Date().getHours();
+  const daySeed = new Date().getDate();
+  const slot = daySeed + Math.floor(hour / 3);
+
+  if (season === 'spring') return slot % 4 === 0 ? 'rain' : 'sunny';
+  if (season === 'summer') return timeTheme === 'dusk' && slot % 5 === 0 ? 'rain' : 'sunny';
+  return slot % 5 === 0 ? 'rain' : 'sunny';
+};
+
+const seasonLayerFilterMap: Record<ResolvedSeason, string> = {
   spring: 'saturate(1.08) hue-rotate(-4deg) brightness(1.02)',
   summer: 'saturate(1.14) hue-rotate(2deg) brightness(1.03)',
   autumn: 'saturate(1.06) hue-rotate(-16deg) brightness(0.99)',
@@ -154,7 +425,8 @@ const seasonHintMap: Record<SeasonMode, string> = {
   winter: '冬季偏松柏与冰雪树',
 };
 
-const weatherHintMap: Record<WeatherType, string> = {
+const weatherHintMap: Record<WeatherMode, string> = {
+  auto: '自动按当前季节与时段变化',
   sunny: '阳光粒子，整体更轻快',
   rain: '雨滴粒子，空气更湿润',
   snow: '雪花粒子，氛围更安静',
@@ -211,26 +483,39 @@ export default function Index() {
   const triggerGlobalSilence = useForestStore((state) => state.triggerGlobalSilence);
   const triggerDivineSurge = useForestStore((state) => state.triggerDivineSurge);
   const setConversationWeather = useForestStore((state) => state.setConversationWeather);
+  const activeDialogueAgentId = useForestStore((state) => state.activeDialogueAgentId);
+  const setActiveDialogueAgent = useForestStore((state) => state.setActiveDialogueAgent);
   const agents = useForestStore((state) => state.agents);
   const chatHistory = useForestStore((state) => state.chatHistory);
+  const sceneInteractionEvent = useForestStore((state) => state.sceneInteractionEvent);
   useAgentA2A();
 
   const [drawingOpen, setDrawingOpen] = useState(false);
   const [trees, setTrees] = useState<TreeData[]>([]);
   const [plantingImage, setPlantingImage] = useState<string | null>(null);
+  const [plantingDrawingData, setPlantingDrawingData] = useState<any>(null); // DrawingData
+  const [plantingTreeName, setPlantingTreeName] = useState<string>('');
+  const [plantingPersonality, setPlantingPersonality] = useState<string>('');
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [scrollX, setScrollX] = useState(0);
   const [newTreeId, setNewTreeId] = useState<string | null>(null);
-  const [weather, setWeather] = useState<WeatherType>('sunny');
+  const [weatherMode, setWeatherMode] = useState<WeatherMode>('auto');
   const [cameraZoom, setCameraZoom] = useState(1);
   const [openPopover, setOpenPopover] = useState<'season' | 'weather' | 'time' | null>(null);
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [focusedTreeId, setFocusedTreeId] = useState<string | null>(null);
+  const [chatInputFocusSignal, setChatInputFocusSignal] = useState(0);
+  const [treeShakePromptSignalById, setTreeShakePromptSignalById] = useState<Record<string, number>>({});
   const [seedDrift, setSeedDrift] = useState<{ id: string; glyph: '🍃' | '🪶'; fromY: number; toY: number } | null>(null);
   const [celestialEffect, setCelestialEffect] = useState<'meteor' | 'aurora' | null>(null);
-  const [treeNotice, setTreeNotice] = useState<{ id: string; text: string; sub: string; emoji: string; treeId?: string } | null>(null);
-  const [authCelebration, setAuthCelebration] = useState<{ id: string; title: string; sub: string; emoji: string } | null>(null);
+  const [divineBloom, setDivineBloom] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [treeNotice, setTreeNotice] = useState<{ id: string; text: string; sub: string; emoji: string; treeId?: string; variant?: 'default' | 'divine' } | null>(null);
+  const [authCelebration, setAuthCelebration] = useState<{ id: string; title: string; sub: string; emoji: string; variant?: 'default' | 'divine' } | null>(null);
   const resolvedSeason = resolveSeason(season);
+  const resolvedWeather = resolveWeather(weatherMode, resolvedSeason, theme);
+  const seasonButtonOption = seasonOptions.find((option) => option.value === (season === 'auto' ? resolvedSeason : season))!;
+  const weatherButtonOption = weatherOptions.find((option) => option.value === (weatherMode === 'auto' ? resolvedWeather : weatherMode))!;
+  const timeButtonOption = timeOptions.find((option) => option.value === (timeMode === 'auto' ? theme : timeMode))!;
   const isSummerDawn = resolvedSeason === 'summer' && theme === 'dawn';
   const isSummerDusk = resolvedSeason === 'summer' && theme === 'dusk';
   const isSpringSeason = resolvedSeason === 'spring';
@@ -242,11 +527,20 @@ export default function Index() {
   const scrollStart = useRef(0);
   const scrollXRef = useRef(0);
   const focusAnimRef = useRef<number | null>(null);
+  const currentSessionOwnerRef = useRef<string | null>(loadSecondMeSession()?.user?.userId ?? null);
+  const llmSessionByTreeRef = useRef<TreeChatSessionMap>(loadTreeChatSessions(currentSessionOwnerRef.current));
+  const llmInFlightByTreeRef = useRef<Record<string, boolean>>({});
+  const typewriterStateByEntryRef = useRef<Record<string, TypewriterState>>({});
+  const impatientTreeClickRef = useRef<Record<string, { count: number; lastClickAt: number; lastTriggeredAt: number }>>({});
   const treeNoticeTimerRef = useRef<number | null>(null);
   const authCelebrationTimerRef = useRef<number | null>(null);
+  const persistedChatSnapshotRef = useRef<Map<string, string>>(new Map());
+  const persistedTreeSnapshotRef = useRef<Map<string, string>>(new Map());
+  const relationshipSnapshotRef = useRef<Map<string, { friends: string[]; partner: string | null; parents: string[]; intimacyMap: Record<string, number> }>>(new Map());
   const lastUserActionAtRef = useRef(Date.now());
   const lastGuardianMessageAtRef = useRef(0);
-  const prevResolvedSeasonRef = useRef<Exclude<SeasonMode, 'auto'> | null>(null);
+  const growthStageByTreeRef = useRef<Record<string, ReturnType<typeof getAgentGrowthStage>>>({});
+  const remoteRestoreOwnerRef = useRef<string | null>(null);
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1000;
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
   const worldWidth = Math.max(WORLD_WIDTH_MIN, viewportWidth * WORLD_WIDTH_MULTIPLIER);
@@ -281,22 +575,23 @@ export default function Index() {
           ? 'SecondMe 登录未配置：请设置 VITE_SECONDME_REDIRECT_URI'
           : '')));
   const { emissionRateMultiplier } = useForestEcology();
-  const showTreeNotice = useCallback((text: string, sub: string, emoji: string, durationMs = 3200, treeId?: string) => {
+  
+  const showTreeNotice = useCallback((text: string, sub: string, emoji: string, durationMs = 3200, treeId?: string, variant: 'default' | 'divine' = 'default') => {
     if (treeNoticeTimerRef.current !== null) {
       window.clearTimeout(treeNoticeTimerRef.current);
     }
-    setTreeNotice({ id: `${Date.now()}`, text, sub, emoji, treeId });
+    setTreeNotice({ id: `${Date.now()}`, text, sub, emoji, treeId, variant });
     treeNoticeTimerRef.current = window.setTimeout(() => {
       setTreeNotice(null);
       treeNoticeTimerRef.current = null;
     }, durationMs);
   }, []);
 
-  const showAuthCelebration = useCallback((title: string, sub: string, emoji: string, durationMs = 2400) => {
+  const showAuthCelebration = useCallback((title: string, sub: string, emoji: string, durationMs = 2400, variant: 'default' | 'divine' = 'default') => {
     if (authCelebrationTimerRef.current !== null) {
       window.clearTimeout(authCelebrationTimerRef.current);
     }
-    setAuthCelebration({ id: `${Date.now()}`, title, sub, emoji });
+    setAuthCelebration({ id: `${Date.now()}`, title, sub, emoji, variant });
     authCelebrationTimerRef.current = window.setTimeout(() => {
       setAuthCelebration(null);
       authCelebrationTimerRef.current = null;
@@ -307,6 +602,274 @@ export default function Index() {
     setLoginError(mapAuthErrorMessage(rawMessage));
     setLoginErrorPulse((prev) => prev + 1);
   }, []);
+
+  const ensureTypewriterState = useCallback((entryId: string): TypewriterState => {
+    const existing = typewriterStateByEntryRef.current[entryId];
+    if (existing) return existing;
+    const nextState: TypewriterState = {
+      text: '',
+      queue: [],
+      done: false,
+      timerId: null,
+      waiters: [],
+    };
+    typewriterStateByEntryRef.current[entryId] = nextState;
+    return nextState;
+  }, []);
+
+  const startTypewriter = useCallback((entryId: string) => {
+    const state = ensureTypewriterState(entryId);
+    if (state.timerId !== null) return;
+
+    state.timerId = window.setInterval(() => {
+      const latest = typewriterStateByEntryRef.current[entryId];
+      if (!latest) return;
+
+      if (latest.queue.length > 0) {
+        const emitCount = Math.min(2, latest.queue.length);
+        const nextChunk = latest.queue.splice(0, emitCount).join('');
+        latest.text += nextChunk;
+        useForestStore.getState().updateChatHistoryEntryMessage(entryId, latest.text);
+      }
+
+      if (latest.queue.length === 0 && latest.done) {
+        if (latest.timerId !== null) {
+          window.clearInterval(latest.timerId);
+          latest.timerId = null;
+        }
+        const resolvedText = latest.text;
+        latest.waiters.forEach((resolve) => resolve(resolvedText));
+        delete typewriterStateByEntryRef.current[entryId];
+      }
+    }, 22);
+  }, [ensureTypewriterState]);
+
+  const pushTypewriterChunk = useCallback((entryId: string, chunk: string) => {
+    if (!chunk) return;
+    const state = ensureTypewriterState(entryId);
+    state.queue.push(...Array.from(chunk));
+    startTypewriter(entryId);
+  }, [ensureTypewriterState, startTypewriter]);
+
+  const completeTypewriterEntry = useCallback(async (entryId: string) => {
+    const state = ensureTypewriterState(entryId);
+    state.done = true;
+    startTypewriter(entryId);
+
+    if (state.timerId === null && state.queue.length === 0) {
+      return state.text;
+    }
+
+    return new Promise<string>((resolve) => {
+      const latest = ensureTypewriterState(entryId);
+      latest.waiters.push(resolve);
+    });
+  }, [ensureTypewriterState, startTypewriter]);
+
+  const flushTypewriterImmediately = useCallback((entryId: string, finalText: string) => {
+    const state = typewriterStateByEntryRef.current[entryId];
+    if (state?.timerId !== null) {
+      window.clearInterval(state.timerId);
+    }
+    if (state) {
+      state.waiters.forEach((resolve) => resolve(finalText));
+      delete typewriterStateByEntryRef.current[entryId];
+    }
+    useForestStore.getState().updateChatHistoryEntryMessage(entryId, finalText);
+  }, []);
+
+  // 恢复被挂起的 AudioContext（浏览器自动播放限制）
+  useEffect(() => {
+    const restoreAudioEnvironments = () => {
+      try {
+        // 恢复所有存活的 Web Audio API 上下文
+        if (typeof window !== 'undefined') {
+          // 收集所有注册的实例
+          const potentialContexts: AudioContext[] = [];
+          
+          if (Array.isArray((window as any).__audioInstances)) {
+            potentialContexts.push(...((window as any).__audioInstances as AudioContext[]));
+          }
+          
+          // 逐个检查并恢复
+          for (const ctx of potentialContexts) {
+            if (ctx && typeof ctx.resume === 'function' && ctx.state === 'suspended') {
+              void ctx.resume().catch(() => {
+                // 忽略恢复失败
+              });
+            }
+          }
+        }
+      } catch (e) {
+        // 忽略任何错误
+      }
+    };
+
+    // 在任何用户交互时恢复 AudioContext
+    const handleUserInteraction = () => {
+      restoreAudioEnvironments();
+    };
+
+    // 绑定关键交互事件（non-passive 以确保捕获）
+    document.addEventListener('click', handleUserInteraction, false);
+    document.addEventListener('touchstart', handleUserInteraction, false);
+    document.addEventListener('keydown', handleUserInteraction, false);
+    document.addEventListener('mousedown', handleUserInteraction, false);
+    window.addEventListener('focus', handleUserInteraction, false);
+
+    // 初始化时也尝试一次
+    setTimeout(() => restoreAudioEnvironments(), 100);
+
+    return () => {
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('touchstart', handleUserInteraction);
+      document.removeEventListener('keydown', handleUserInteraction);
+      document.removeEventListener('mousedown', handleUserInteraction);
+      window.removeEventListener('focus', handleUserInteraction);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (chatHistory.length === 0) return;
+    const latest = chatHistory[chatHistory.length - 1];
+    if (!latest?.id || !latest.message?.trim()) return;
+
+    const previousMessage = persistedChatSnapshotRef.current.get(latest.id);
+    if (previousMessage === latest.message) return;
+    persistedChatSnapshotRef.current.set(latest.id, latest.message);
+
+    const partnerName = agents.find((agent) => agent.id === latest.listenerId)?.name;
+    void saveTreeChatHighlight(latest, partnerName);
+    if ((latest.likes ?? 0) > 0 || (latest.comments ?? 0) > 0 || latest.isTrending) {
+      void upsertTreeEngagementEvent(latest);
+    }
+  }, [agents, chatHistory]);
+
+  useEffect(() => {
+    const treeById = new Map(trees.map((tree) => [tree.id, tree]));
+    const manualAgents = agents.filter((agent) => agent.isManual);
+    for (const agent of manualAgents) {
+      const renderedTree = treeById.get(agent.id);
+      const sceneState = renderedTree
+        ? {
+            renderSize: renderedTree.size,
+            positionX: agent.position.x,
+            positionY: agent.position.y,
+            spawnType: renderedTree.spawnType,
+          }
+        : {
+            positionX: agent.position.x,
+            positionY: agent.position.y,
+          };
+      const snapshot = JSON.stringify({
+        name: agent.name,
+        personality: agent.personality,
+        energy: agent.energy,
+        generation: agent.generation,
+        growthScore: agent.growthScore,
+        parents: agent.parents,
+        socialCircle: agent.socialCircle,
+        intimacyMap: agent.intimacyMap,
+        bio: agent.metadata.bio,
+        lastWords: agent.metadata.lastWords,
+        sceneState,
+      });
+      if (persistedTreeSnapshotRef.current.get(agent.id) === snapshot) continue;
+      persistedTreeSnapshotRef.current.set(agent.id, snapshot);
+      void upsertTreeProfile(agent, { sceneState });
+    }
+  }, [agents, trees]);
+
+  useEffect(() => {
+    if (agents.length === 0) return;
+
+    const nextSnapshot = new Map(
+      agents.map((agent) => [
+        agent.id,
+        {
+          friends: [...agent.socialCircle.friends].sort(),
+          partner: agent.socialCircle.partner ?? null,
+          parents: [...agent.parents].sort(),
+          intimacyMap: { ...agent.intimacyMap },
+        },
+      ]),
+    );
+
+    if (relationshipSnapshotRef.current.size === 0) {
+      relationshipSnapshotRef.current = nextSnapshot;
+      return;
+    }
+
+    for (const agent of agents) {
+      const prev = relationshipSnapshotRef.current.get(agent.id);
+      if (!prev) continue;
+
+      const newFriends = agent.socialCircle.friends.filter((id) => !prev.friends.includes(id));
+      for (const friendId of newFriends) {
+        const friendName = agents.find((candidate) => candidate.id === friendId)?.name ?? '树友';
+        void saveRelationshipEvent({
+          treeId: agent.id,
+          relatedTreeId: friendId,
+          eventType: 'friend_added',
+          eventLabel: '结识新朋友',
+          detail: {
+            friendName,
+            intimacy: agent.intimacyMap[friendId] ?? 0,
+          },
+        });
+      }
+
+      if (agent.socialCircle.partner !== prev.partner) {
+        if (agent.socialCircle.partner) {
+          const partnerName = agents.find((candidate) => candidate.id === agent.socialCircle.partner)?.name ?? '伴侣';
+          void saveRelationshipEvent({
+            treeId: agent.id,
+            relatedTreeId: agent.socialCircle.partner,
+            eventType: 'partner_bound',
+            eventLabel: '缔结伴侣关系',
+            detail: { partnerName },
+          });
+        } else if (prev.partner) {
+          const formerPartnerName = agents.find((candidate) => candidate.id === prev.partner)?.name ?? '伴侣';
+          void saveRelationshipEvent({
+            treeId: agent.id,
+            relatedTreeId: prev.partner,
+            eventType: 'partner_cleared',
+            eventLabel: '伴侣关系结束',
+            detail: { formerPartnerName },
+          });
+        }
+      }
+
+      const newParents = agent.parents.filter((id) => !prev.parents.includes(id));
+      for (const parentId of newParents) {
+        const parentName = agents.find((candidate) => candidate.id === parentId)?.name ?? '家族成员';
+        void saveRelationshipEvent({
+          treeId: agent.id,
+          relatedTreeId: parentId,
+          eventType: 'parent_added',
+          eventLabel: '家族关系登记',
+          detail: { parentName },
+        });
+      }
+
+      for (const [relatedTreeId, intimacy] of Object.entries(agent.intimacyMap)) {
+        const prevIntimacy = prev.intimacyMap[relatedTreeId] ?? 0;
+        if (prevIntimacy < 85 && intimacy >= 85) {
+          const relatedName = agents.find((candidate) => candidate.id === relatedTreeId)?.name ?? '树友';
+          void saveRelationshipEvent({
+            treeId: agent.id,
+            relatedTreeId,
+            eventType: 'intimacy_milestone',
+            eventLabel: '亲密度突破 85%',
+            detail: { relatedName, intimacy },
+          });
+        }
+      }
+    }
+
+    relationshipSnapshotRef.current = nextSnapshot;
+  }, [agents]);
 
   const exchangeSecondMeCode = useCallback(async (code: string) => {
     if (import.meta.env.DEV) {
@@ -421,8 +984,7 @@ export default function Index() {
         setAuthInitializing(false);
         setSsoSubmitting(false);
         setLoginPulse((prev) => prev + 1);
-        showTreeNotice(`欢迎回来，${finalName}`, 'SecondMe 通行证已激活', '🎐', 2600);
-        showAuthCelebration('通行证已激活', `${finalName}，欢迎回到森林`, '🎫');
+        showAuthCelebration(`欢迎回来，${finalName}`, `已激活 SecondMe 通行证`, '🎐', 2600);
         return;
       }
 
@@ -454,6 +1016,13 @@ export default function Index() {
       setLoginModalOpen(true);
     }
   }, [authLocked]);
+
+  useEffect(() => {
+    const currentSession = loadSecondMeSession();
+    const ownerId = currentSession?.user?.userId ?? null;
+    currentSessionOwnerRef.current = ownerId;
+    llmSessionByTreeRef.current = loadTreeChatSessions(ownerId);
+  }, [username]);
 
   const handleLoginEntry = useCallback(async (): Promise<'login-success' | 'logout' | 'noop'> => {
     if (ssoSubmitting) return 'noop';
@@ -569,17 +1138,9 @@ export default function Index() {
   });
 
   useEffect(() => {
-    const nextWeather: WeatherType | 'night' = theme === 'night' ? 'night' : weather;
+    const nextWeather: WeatherType | 'night' = theme === 'night' ? 'night' : resolvedWeather;
     setConversationWeather(nextWeather);
-  }, [setConversationWeather, theme, weather]);
-
-  useEffect(() => {
-    const previousSeason = prevResolvedSeasonRef.current;
-    if (resolvedSeason === 'winter' && previousSeason !== 'winter') {
-      setWeather('snow');
-    }
-    prevResolvedSeasonRef.current = resolvedSeason;
-  }, [resolvedSeason]);
+  }, [resolvedWeather, setConversationWeather, theme]);
 
   useEffect(() => {
     scrollXRef.current = scrollX;
@@ -596,8 +1157,52 @@ export default function Index() {
       if (authCelebrationTimerRef.current !== null) {
         window.clearTimeout(authCelebrationTimerRef.current);
       }
+      Object.values(typewriterStateByEntryRef.current).forEach((state) => {
+        if (state.timerId !== null) {
+          window.clearInterval(state.timerId);
+        }
+      });
+      typewriterStateByEntryRef.current = {};
     };
   }, []);
+
+  useEffect(() => {
+    const prevStages = growthStageByTreeRef.current;
+    const nextStages: Record<string, ReturnType<typeof getAgentGrowthStage>> = {};
+
+    for (const agent of agents) {
+      const stage = getAgentGrowthStage(agent);
+      nextStages[agent.id] = stage;
+
+      const prev = prevStages[agent.id];
+      if (!prev || prev === stage) continue;
+
+      setCelestialEffect(Math.random() < 0.5 ? 'meteor' : 'aurora');
+      window.setTimeout(() => setCelestialEffect(null), 4000);
+
+      const stageLabel = stage === 'GreatTree' ? '古树' : stage === 'YoungTree' ? '青年树' : '幼苗';
+      void saveTreeGrowthEvent({
+        treeId: agent.id,
+        stage,
+        growthScore: agent.growthScore,
+        summary: `${agent.name.replace(/\d+/g, '')} 进化为${stageLabel}`,
+        detail: {
+          stageLabel,
+          previousStage: prev,
+          nextStage: stage,
+        },
+      });
+      showTreeNotice(
+        `${agent.name.replace(/\d+/g, '')} 进化了`,
+        `成长阶段已提升为 ${stageLabel}`,
+        '✨',
+        2800,
+        agent.id,
+      );
+    }
+
+    growthStageByTreeRef.current = nextStages;
+  }, [agents, showTreeNotice]);
 
   // Horizontal drag-to-scroll
   const onPointerDown = useCallback((e: React.PointerEvent) => {
@@ -632,6 +1237,8 @@ export default function Index() {
   const focusTreeById = useCallback((treeId: string) => {
     const target = trees.find((tree) => tree.id === treeId);
     if (!target) return;
+    setActiveDialogueAgent(treeId);
+    setChatInputFocusSignal((value) => value + 1);
 
     const screenCenterX = window.innerWidth * 0.5;
     const targetCenterX = target.x + target.size / 2;
@@ -669,14 +1276,637 @@ export default function Index() {
     window.setTimeout(() => {
       setFocusedTreeId((current) => (current === treeId ? null : current));
     }, 1800);
-  }, [clampScrollX, trees]);
+  }, [clampScrollX, setActiveDialogueAgent, trees]);
+
+  const handleTreeActivate = useCallback((treeId: string) => {
+    const targetAgent = agents.find((agent) => agent.id === treeId);
+    const isAwaitingReply = Boolean(
+      targetAgent
+      && activeDialogueAgentId === treeId
+      && (llmInFlightByTreeRef.current[treeId] || targetAgent.socialState === SocialState.TALKING),
+    );
+
+    if (isAwaitingReply) {
+      const now = Date.now();
+      const prev = impatientTreeClickRef.current[treeId] ?? {
+        count: 0,
+        lastClickAt: 0,
+        lastTriggeredAt: 0,
+      };
+      const nextCount = now - prev.lastClickAt <= TREE_SHAKE_MULTI_CLICK_WINDOW_MS ? prev.count + 1 : 1;
+      const canTrigger = nextCount >= TREE_SHAKE_TRIGGER_COUNT && now - prev.lastTriggeredAt >= TREE_SHAKE_PROMPT_COOLDOWN_MS;
+
+      impatientTreeClickRef.current[treeId] = {
+        count: canTrigger ? 0 : nextCount,
+        lastClickAt: now,
+        lastTriggeredAt: canTrigger ? now : prev.lastTriggeredAt,
+      };
+
+      if (canTrigger) {
+        setTreeShakePromptSignalById((current) => ({
+          ...current,
+          [treeId]: (current[treeId] ?? 0) + 1,
+        }));
+      }
+    } else {
+      impatientTreeClickRef.current[treeId] = {
+        count: 0,
+        lastClickAt: 0,
+        lastTriggeredAt: 0,
+      };
+    }
+
+    setActiveDialogueAgent(treeId);
+    setChatInputFocusSignal((value) => value + 1);
+    setFocusedTreeId(treeId);
+    window.setTimeout(() => {
+      setFocusedTreeId((current) => (current === treeId ? null : current));
+    }, 1800);
+    if (chatCollapsed) {
+      setChatCollapsed(false);
+    }
+  }, [activeDialogueAgentId, agents, chatCollapsed, setActiveDialogueAgent]);
+
+  const fetchSoftMemorySnippets = useCallback(async (accessToken: string, keyword: string): Promise<string[]> => {
+    const query = new URLSearchParams({
+      pageNo: '1',
+      pageSize: '5',
+      keyword: keyword.slice(0, 20),
+    });
+
+    try {
+      const response = await fetch(`${SECONDME_API_BASE_URL}/api/secondme/user/softmemory?${query.toString()}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || payload?.code !== 0) return [];
+
+      const list = (payload?.data?.list ?? []) as SoftMemoryItem[];
+      return list
+        .slice(0, 3)
+        .map((item) => `${item.factObject ?? '记忆'}：${item.factContent ?? ''}`.trim())
+        .filter((entry) => entry.length > 0);
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const streamSecondMeChat = useCallback(async (args: {
+    accessToken: string;
+    sessionOwnerUserId: string | null;
+    payload: TreeLlmPayload;
+    targetTreeId: string;
+    onDeltaChunk: (deltaChunk: string) => void;
+  }) => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), SECONDME_CHAT_TIMEOUT_MS);
+    const previousSessionId = llmSessionByTreeRef.current[args.targetTreeId];
+
+    try {
+      const response = await fetch(`${SECONDME_API_BASE_URL}/api/secondme/chat/stream`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${args.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: args.payload.userInput,
+          messages: [
+            { role: 'system', content: args.payload.systemPrompt },
+            ...args.payload.historyMessages,
+            { role: 'user', content: args.payload.userInput },
+          ],
+          model: SECONDME_STREAM_MODEL,
+          sessionId: previousSessionId,
+          systemPrompt: args.payload.systemPrompt,
+          context: {
+            treePersonality: args.payload.treePersonality,
+            forestSeason: args.payload.forestSeason,
+            forestTime: args.payload.forestTime,
+            softMemorySnippets: args.payload.softMemorySnippets,
+            historyMessages: args.payload.historyMessages,
+          },
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        throw new Error('secondme_stream_failed');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = '';
+      let accumulated = '';
+
+      const processChunk = (chunk: string) => {
+        const lines = chunk.split('\n').map((line) => line.trim()).filter(Boolean);
+        if (lines.length === 0) return false;
+
+        let eventName = 'data';
+        const dataLines: string[] = [];
+
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventName = line.slice(6).trim();
+            continue;
+          }
+          if (line.startsWith('data:')) {
+            dataLines.push(line.slice(5).trim());
+          }
+        }
+
+        const dataText = dataLines.join('');
+        if (!dataText) return false;
+        if (dataText === '[DONE]') return true;
+
+        if (eventName === 'session') {
+          const sessionPayload = JSON.parse(dataText) as { sessionId?: string };
+          if (sessionPayload.sessionId) {
+            llmSessionByTreeRef.current[args.targetTreeId] = sessionPayload.sessionId;
+            saveTreeChatSessions(llmSessionByTreeRef.current, args.sessionOwnerUserId);
+          }
+          return false;
+        }
+
+        const payload = JSON.parse(dataText) as {
+          choices?: Array<{ delta?: { content?: string } }>;
+          delta?: { content?: string };
+          content?: string;
+        };
+        const deltaText = payload.choices?.[0]?.delta?.content ?? payload.delta?.content ?? payload.content ?? '';
+        if (!deltaText) return false;
+
+        accumulated += deltaText;
+        args.onDeltaChunk(deltaText);
+        return false;
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+        const frames = buffered.split('\n\n');
+        buffered = frames.pop() ?? '';
+
+        for (const frame of frames) {
+          const ended = processChunk(frame);
+          if (ended) {
+            return accumulated;
+          }
+        }
+      }
+
+      if (buffered.trim()) {
+        processChunk(buffered);
+      }
+
+      return accumulated;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }, []);
+
+  const handleSendMessageToTree = useCallback(async (message: string, targetTreeId: string): Promise<boolean> => {
+    const content = message.trim();
+    console.log('[SendMessage/U2A] 开始处理私聊消息，目标树ID:', targetTreeId, '消息长度:', content.length);
+    if (!content || !targetTreeId) {
+      console.log('[SendMessage/U2A] 内容或目标树ID为空，返回false');
+      return false;
+    }
+
+    if (llmInFlightByTreeRef.current[targetTreeId]) {
+      console.log('[SendMessage/U2A] 该树已有LLM请求在进行中，返回false');
+      return false;
+    }
+
+    const store = useForestStore.getState();
+    const session = loadSecondMeSession();
+    const sessionOwnerUserId = session?.user?.userId ?? null;
+    console.log('[SendMessage/U2A] 已加载会话，AccessToken存在:', !!session?.accessToken, 'UserID:', sessionOwnerUserId);
+    
+    if (currentSessionOwnerRef.current !== sessionOwnerUserId) {
+      currentSessionOwnerRef.current = sessionOwnerUserId;
+      llmSessionByTreeRef.current = loadTreeChatSessions(sessionOwnerUserId);
+      console.log('[SendMessage/U2A] 会话用户已更新');
+    }
+    const manualTree = [...store.agents].reverse().find((agent) => agent.isManual);
+    const targetTree = store.agents.find((agent) => agent.id === targetTreeId);
+    if (!targetTree) {
+      console.log('[SendMessage/U2A] 目标树不存在，返回false');
+      return false;
+    }
+
+    console.log('[SendMessage/U2A] 找到目标树:', targetTree.name, '，开始记录消息');
+    store.setActiveDialogueAgent(targetTreeId);
+
+    const userSpeakerId = manualTree?.id ?? FOREST_CHAT_USER_ID;
+    const userListenerId = targetTree.id;
+    const userMessage = content;
+
+    const userEntryId = createMessageId('user');
+    const userEntryCreatedAt = Date.now();
+    store.addChatHistoryEntry({
+      id: userEntryId,
+      createdAt: userEntryCreatedAt,
+      speakerId: userSpeakerId,
+      listenerId: userListenerId,
+      message: userMessage,
+      type: 'chat',
+      source: 'user',
+      conversationMode: 'direct',
+    });
+    console.log('[SendMessage/U2A] 用户消息已记录到本地，ID:', userEntryId);
+    
+    void saveConversationMessage({
+      chatEntryId: userEntryId,
+      speakerTreeId: userSpeakerId,
+      listenerTreeId: userListenerId,
+      message: userMessage,
+      sourceType: 'user',
+      conversationMode: 'direct',
+      createdAt: userEntryCreatedAt,
+    });
+    if (manualTree) {
+      store.recordDialogueMemory(manualTree.id, targetTree.id, content);
+      store.setLastWordsFor([manualTree.id], content);
+    }
+    store.setActiveChat({
+      treeAId: manualTree?.id ?? targetTree.id,
+      treeBId: targetTree.id,
+      message: userMessage,
+    });
+
+    if (!session?.accessToken) {
+      const notice = '请先完成 SecondMe 登录，再和树进行 AI 对话。';
+      console.log('[SendMessage/U2A] 认证或树设置失败:', notice);
+      showTreeNotice('AI 对话未就绪', notice, '🌱', 2400);
+      // ✅ 修复：消息已经被本地记录，所以返回true让输入框清空
+      return true;
+    }
+
+    llmInFlightByTreeRef.current[targetTreeId] = true;
+    impatientTreeClickRef.current[targetTreeId] = {
+      count: 0,
+      lastClickAt: 0,
+      lastTriggeredAt: 0,
+    };
+    store.setSocialStateFor([targetTree.id], SocialState.TALKING);
+
+    const replyEntryId = createMessageId('llm');
+    const replyEntryCreatedAt = Date.now();
+    store.addChatHistoryEntry({
+      id: replyEntryId,
+      createdAt: replyEntryCreatedAt,
+      speakerId: targetTree.id,
+      listenerId: manualTree?.id ?? FOREST_CHAT_USER_ID,
+      message: '',
+      type: 'chat',
+      source: 'llm',
+      conversationMode: 'direct',
+    });
+    console.log('[SendMessage/U2A] 已创建LLM回复占位符，ID:', replyEntryId);
+
+    try {
+      console.log('[SendMessage/U2A] 开始获取软记忆和历史消息');
+      const softMemorySnippets = await fetchSoftMemorySnippets(
+        session.accessToken,
+        `${targetTree.name} ${content}`,
+      );
+      console.log('[SendMessage/U2A] 获取软记忆成功，数量:', softMemorySnippets.length);
+      
+      const historyMessages = buildRecentU2AHistory({
+        history: store.chatHistory,
+        targetTreeId: targetTree.id,
+        userSpeakerId: manualTree?.id ?? FOREST_CHAT_USER_ID,
+        limit: 5,
+        excludeEntryId: userEntryId,
+      });
+      console.log('[SendMessage/U2A] 获取历史消息成功，数量:', historyMessages.length);
+
+      const llmPayload: TreeLlmPayload = {
+        userInput: content,
+        treeName: targetTree.name,
+        treePersonality: targetTree.personality,
+        forestSeason: resolvedSeason,
+        forestTime: toReadableForestTime(theme),
+        softMemorySnippets,
+        historyMessages,
+        systemPrompt: buildTreePersonaSystemMessage({
+          tree: targetTree,
+          forestSeason: resolvedSeason,
+          forestTime: toReadableForestTime(theme),
+          softMemorySnippets,
+          historyMessages,
+        }),
+      };
+
+      console.log('[SendMessage/U2A] 开始调用 SecondMe Chat API，端点: /api/secondme/chat/stream');
+      let finalReply = await streamSecondMeChat({
+        accessToken: session.accessToken,
+        sessionOwnerUserId,
+        payload: llmPayload,
+        targetTreeId,
+        onDeltaChunk: (nextText) => {
+          pushTypewriterChunk(replyEntryId, nextText);
+        },
+      });
+      console.log('[SendMessage/U2A] SecondMe Chat API 返回结果，长度:', finalReply?.length ?? 0);
+
+      const typedReply = await completeTypewriterEntry(replyEntryId);
+      finalReply = fitDialogueToPolicy(typedReply || finalReply, targetTree.personality);
+      if (!finalReply) {
+        finalReply = pickTimeoutReply(targetTree.personality);
+        console.log('[SendMessage/U2A] 回复为空，使用超时默认回复');
+      }
+      flushTypewriterImmediately(replyEntryId, finalReply);
+
+      void saveConversationMessage({
+        chatEntryId: replyEntryId,
+        speakerTreeId: targetTree.id,
+        listenerTreeId: manualTree?.id ?? FOREST_CHAT_USER_ID,
+        message: finalReply,
+        sourceType: 'llm',
+        conversationMode: 'direct',
+        createdAt: replyEntryCreatedAt,
+      });
+
+      if (manualTree) {
+        store.recordDialogueMemory(targetTree.id, manualTree.id, finalReply);
+      }
+      store.setLastWordsFor([targetTree.id], finalReply);
+      store.setActiveChat({
+        treeAId: targetTree.id,
+        treeBId: manualTree?.id ?? targetTree.id,
+        message: finalReply,
+      });
+      console.log('[SendMessage/U2A] LLM对话完成成功');
+      return true;
+    } catch (error) {
+      console.error('[SendMessage/U2A] API调用或处理出错:', error instanceof Error ? error.message : String(error));
+      const failureText = '森林信道短暂中断，请再和我说一次。';
+      flushTypewriterImmediately(replyEntryId, failureText);
+      void saveConversationMessage({
+        chatEntryId: replyEntryId,
+        speakerTreeId: targetTree.id,
+        listenerTreeId: manualTree?.id ?? FOREST_CHAT_USER_ID,
+        message: failureText,
+        sourceType: 'system',
+        conversationMode: 'direct',
+        createdAt: replyEntryCreatedAt,
+      });
+      store.setLastWordsFor([targetTree.id], failureText);
+      store.setActiveChat({
+        treeAId: targetTree.id,
+        treeBId: manualTree?.id ?? targetTree.id,
+        message: failureText,
+      });
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('[SendMessage/U2A] 请求被超时中止');
+        return true;
+      }
+      return true;
+    } finally {
+      const latest = useForestStore.getState();
+      latest.setSocialStateFor([targetTree.id], SocialState.IDLE);
+      llmInFlightByTreeRef.current[targetTreeId] = false;
+      console.log('[SendMessage/U2A] 清理发送状态');
+    }
+  }, [completeTypewriterEntry, fetchSoftMemorySnippets, flushTypewriterImmediately, pushTypewriterChunk, resolvedSeason, showTreeNotice, streamSecondMeChat, theme]);
+
+  const handleSendSocialMessage = useCallback(async (message: string, targetTreeId?: string | null): Promise<boolean> => {
+    const content = message.trim();
+    if (!content) return false;
+
+    const store = useForestStore.getState();
+    const session = loadSecondMeSession();
+    const sessionOwnerUserId = session?.user?.userId ?? null;
+    if (currentSessionOwnerRef.current !== sessionOwnerUserId) {
+      currentSessionOwnerRef.current = sessionOwnerUserId;
+      llmSessionByTreeRef.current = loadTreeChatSessions(sessionOwnerUserId);
+    }
+
+    const manualTree = [...store.agents].reverse().find((agent) => agent.isManual);
+    const hasLeadingMention = /^@[^\s]+\s+/.test(content);
+    const normalizedContent = content.replace(/^@[^\s]+\s+/, '').trim() || content;
+    const mentionedTarget = hasLeadingMention && targetTreeId
+      ? store.agents.find((agent) => agent.id === targetTreeId)
+      : null;
+    const userSpeakerId = manualTree?.id ?? FOREST_CHAT_USER_ID;
+
+    if (!userSpeakerId) return false;
+
+    const userEntryId = createMessageId('group-user');
+    const userEntryCreatedAt = Date.now();
+    store.addChatHistoryEntry({
+      id: userEntryId,
+      createdAt: userEntryCreatedAt,
+      speakerId: userSpeakerId,
+      listenerId: mentionedTarget?.id ?? '__forest_group__',
+      message: content,
+      type: 'chat',
+      source: 'user',
+      conversationMode: 'group',
+    });
+
+    if (mentionedTarget && userSpeakerId !== mentionedTarget.id) {
+      void saveConversationMessage({
+        chatEntryId: userEntryId,
+        speakerTreeId: userSpeakerId,
+        listenerTreeId: mentionedTarget.id,
+        message: content,
+        sourceType: 'user',
+        conversationMode: 'group',
+        createdAt: userEntryCreatedAt,
+      });
+    }
+
+    if (manualTree) {
+      store.setLastWordsFor([manualTree.id], normalizedContent);
+      if (mentionedTarget) {
+        store.recordDialogueMemory(manualTree.id, mentionedTarget.id, normalizedContent);
+      }
+    }
+
+    const requestGroupReplyFromTree = async (targetTree: typeof store.agents[number]) => {
+      if (llmInFlightByTreeRef.current[targetTree.id]) {
+        return;
+      }
+
+      store.setActiveDialogueAgent(targetTree.id);
+      store.setActiveChat({
+        treeAId: manualTree?.id ?? targetTree.id,
+        treeBId: targetTree.id,
+        message: content,
+      });
+
+      llmInFlightByTreeRef.current[targetTree.id] = true;
+      impatientTreeClickRef.current[targetTree.id] = {
+        count: 0,
+        lastClickAt: 0,
+        lastTriggeredAt: 0,
+      };
+      store.setSocialStateFor([targetTree.id], SocialState.TALKING);
+
+      const replyEntryId = createMessageId('group-llm');
+      const replyEntryCreatedAt = Date.now();
+      store.addChatHistoryEntry({
+        id: replyEntryId,
+        createdAt: replyEntryCreatedAt,
+        speakerId: targetTree.id,
+        listenerId: manualTree?.id ?? FOREST_CHAT_USER_ID,
+        message: '',
+        type: 'chat',
+        source: 'llm',
+        conversationMode: 'group',
+      });
+
+      try {
+        const softMemorySnippets = await fetchSoftMemorySnippets(
+          session.accessToken,
+          `${targetTree.name} ${normalizedContent}`,
+        );
+        const historyMessages = buildRecentU2AHistory({
+          history: store.chatHistory,
+          targetTreeId: targetTree.id,
+          userSpeakerId: manualTree?.id ?? FOREST_CHAT_USER_ID,
+          limit: 5,
+          excludeEntryId: userEntryId,
+        });
+
+        const llmPayload: TreeLlmPayload = {
+          userInput: normalizedContent,
+          treeName: targetTree.name,
+          treePersonality: targetTree.personality,
+          forestSeason: resolvedSeason,
+          forestTime: toReadableForestTime(theme),
+          softMemorySnippets,
+          historyMessages,
+          systemPrompt: buildTreePersonaSystemMessage({
+            tree: targetTree,
+            forestSeason: resolvedSeason,
+            forestTime: toReadableForestTime(theme),
+            softMemorySnippets,
+            historyMessages,
+          }),
+        };
+
+        let finalReply = await streamSecondMeChat({
+          accessToken: session.accessToken,
+          sessionOwnerUserId,
+          payload: llmPayload,
+          targetTreeId: targetTree.id,
+          onDeltaChunk: (nextText) => {
+            pushTypewriterChunk(replyEntryId, nextText);
+          },
+        });
+
+        const typedReply = await completeTypewriterEntry(replyEntryId);
+        finalReply = fitDialogueToPolicy(typedReply || finalReply, targetTree.personality);
+        if (!finalReply) {
+          finalReply = pickTimeoutReply(targetTree.personality);
+        }
+        flushTypewriterImmediately(replyEntryId, finalReply);
+
+        void saveConversationMessage({
+          chatEntryId: replyEntryId,
+          speakerTreeId: targetTree.id,
+          listenerTreeId: manualTree?.id ?? FOREST_CHAT_USER_ID,
+          message: finalReply,
+          sourceType: 'llm',
+          conversationMode: 'group',
+          createdAt: replyEntryCreatedAt,
+        });
+
+        if (manualTree) {
+          store.recordDialogueMemory(targetTree.id, manualTree.id, finalReply);
+        }
+        store.setLastWordsFor([targetTree.id], finalReply);
+        store.setActiveChat({
+          treeAId: targetTree.id,
+          treeBId: manualTree?.id ?? targetTree.id,
+          message: finalReply,
+        });
+      } catch (error) {
+        const failureText = '森林信道短暂中断，请再和我说一次。';
+        flushTypewriterImmediately(replyEntryId, failureText);
+        void saveConversationMessage({
+          chatEntryId: replyEntryId,
+          speakerTreeId: targetTree.id,
+          listenerTreeId: manualTree?.id ?? FOREST_CHAT_USER_ID,
+          message: failureText,
+          sourceType: 'system',
+          conversationMode: 'group',
+          createdAt: replyEntryCreatedAt,
+        });
+        store.setLastWordsFor([targetTree.id], failureText);
+        store.setActiveChat({
+          treeAId: targetTree.id,
+          treeBId: manualTree?.id ?? targetTree.id,
+          message: failureText,
+        });
+      } finally {
+        const latest = useForestStore.getState();
+        latest.setSocialStateFor([targetTree.id], SocialState.IDLE);
+        llmInFlightByTreeRef.current[targetTree.id] = false;
+      }
+    };
+
+    if (mentionedTarget) {
+      const targetTree = mentionedTarget;
+      if (!session?.accessToken) {
+        const notice = '请先完成 SecondMe 登录，再使用 @树名 进行 AI 对话。';
+        showTreeNotice('AI 对话未就绪', notice, '🌱', 2400);
+        return true;
+      }
+
+      await requestGroupReplyFromTree(targetTree);
+      return true;
+    }
+
+    if (!session?.accessToken) {
+      showTreeNotice('AI 对话未就绪', '请先完成 SecondMe 登录，群聊树木才能自动回应。', '🌱', 2400);
+      return true;
+    }
+
+    const availableTargets = store.agents.filter((agent) => !agent.isManual && !llmInFlightByTreeRef.current[agent.id]);
+    const prioritizedTargets: typeof availableTargets = [];
+    const seenIds = new Set<string>();
+
+    const pushTarget = (agent?: (typeof availableTargets)[number]) => {
+      if (!agent || seenIds.has(agent.id)) return;
+      seenIds.add(agent.id);
+      prioritizedTargets.push(agent);
+    };
+
+    pushTarget(targetTreeId ? store.agents.find((agent) => agent.id === targetTreeId && !agent.isManual) : undefined);
+
+    const shuffledRemainder = availableTargets
+      .filter((agent) => !seenIds.has(agent.id))
+      .sort(() => Math.random() - 0.5);
+
+    shuffledRemainder.forEach((agent) => pushTarget(agent));
+
+    const replyTargets = prioritizedTargets.slice(0, Math.min(2, prioritizedTargets.length));
+
+    if (replyTargets.length === 0) {
+      showTreeNotice('森林暂时安静', '现在没有空闲树接话，稍后再喊一声。', '🌲', 2200);
+      return true;
+    }
+
+    await Promise.allSettled(replyTargets.map((targetTree) => requestGroupReplyFromTree(targetTree)));
+    return true;
+  }, [completeTypewriterEntry, fetchSoftMemorySnippets, flushTypewriterImmediately, pushTypewriterChunk, resolvedSeason, showTreeNotice, streamSecondMeChat, theme]);
 
   const handleSelectChatMessage = useCallback((entry: ChatHistoryEntry) => {
     focusTreeById(entry.speakerId);
   }, [focusTreeById]);
 
   // Handle planting
-  const handlePlant = useCallback((imageData: string) => {
+  const handlePlant = useCallback((imageData: string, drawingData: any, treeName: string, personality: string) => {
     if (!username) {
       setLoginModalOpen(true);
       showTreeNotice('请先使用 SecondMe 登录', '登录后才可以播种你的树', '🔐', 2600);
@@ -684,6 +1914,9 @@ export default function Index() {
     }
     setDrawingOpen(false);
     setPlantingImage(imageData);
+    setPlantingDrawingData(drawingData);
+    setPlantingTreeName(treeName);
+    setPlantingPersonality(personality);
   }, [showTreeNotice, username]);
 
   const playManualFirstHeartbeat = useCallback(() => {
@@ -737,6 +1970,9 @@ export default function Index() {
     if (!username) {
       setLoginModalOpen(true);
       setPlantingImage(null);
+      setPlantingDrawingData(null);
+      setPlantingTreeName('');
+      setPlantingPersonality('');
       showTreeNotice('请先使用 SecondMe 登录', '登录后才能把树种进森林', '🔐', 2600);
       return;
     }
@@ -748,7 +1984,28 @@ export default function Index() {
     const worldX = x - size / 2 - scrollX + size / 2;
     const divineShape = pickShapeByWorldEcology(worldX, worldWidth);
 
-    // Play wood chime sound
+    // 优先使用用户自定义性格，否则回退到 SecondMe 推断
+    const finalPersonality = plantingPersonality || (() => {
+      const secondmeSession = loadSecondMeSession();
+      const userTags = secondmeSession?.user?.tags;
+      return inferPersonalityFromTags(userTags) || '神启';
+    })();
+    
+    const finalName = plantingTreeName.trim() || '无名新芽';
+
+    const finalTag = (() => {
+      const TAG_LIBRARY: Record<string, string[]> = {
+        温柔: ['佛系养生博主', '长期主义者', '云端漂泊者', '慢生活倡导人'],
+        睿智: ['清醒老巨人', '深度思考者', '哲学观察员', '根系智者'],
+        顽皮: ['脆皮大学生', '尊嘟假嘟', '全林最野的崽', '麻烦制造机器', '快乐捣蛋鬼'],
+        活泼: ['社牛树', '热情加速器', '林间活力家', '显眼包大户'],
+        社恐: ['i树人', '咸鱼树', '别点我报警了', '沉默是金爱好者', '独处治愈师'],
+        神启: ['甲方爸爸的树', '这个树很City', '神性肃静', '宇宙选中的树', '创世见证者'],
+      };
+      const tags = TAG_LIBRARY[finalPersonality] || TAG_LIBRARY['温柔'];
+      return tags[Math.floor(Math.random() * tags.length)];
+    })();
+
     try {
       const actx = new (window.AudioContext || (window as any).webkitAudioContext)();
       const osc = actx.createOscillator();
@@ -772,16 +2029,23 @@ export default function Index() {
       spawnType: 'manual',
     }]);
 
+    const treeBio = plantingPersonality
+      ? `拥有${finalPersonality}的灵魂，由造物主亲手绘就，并以「${finalName}」之名种入这片森林。`
+      : '由造物主亲手种下，能感知整片森林的呼吸与远方的年轮。';
+
     addTree({
       id,
       position: { x: worldX, y: clampedY },
       scale: 1,
       zIndex: Math.floor(clampedY),
-      name: `神启${Math.floor(10 + Math.random() * 90)}`,
-      personality: '神启',
+      name: finalName,
+      tag: finalTag,
+      personality: finalPersonality,
       metadata: {
-        bio: '由造物主亲手种下，能感知整片森林的呼吸与远方的年轮。',
+        bio: treeBio,
         lastWords: '愿你们都在风里长成自己。',
+        drawingImageData: plantingImage,
+        drawingData: plantingDrawingData,
       },
       energy: 100,
       generation: 0,
@@ -793,17 +2057,208 @@ export default function Index() {
       shape: divineShape,
     });
 
+    // Persist to localStorage so the tree survives page refresh.
+    const ownerId = loadSecondMeSession()?.user?.userId ?? null;
+    const existingStored = loadManualTrees(ownerId);
+    const newEntry: PersistedManualTreeEntry = {
+      id,
+      imageData: plantingImage!,
+      x: x - size / 2 - scrollX,
+      y: clampedY - size,
+      size,
+      worldX,
+      worldY: clampedY,
+      name: finalName,
+      tag: finalTag,
+      personality: finalPersonality,
+      bio: treeBio,
+      lastWords: '愿你们都在风里长成自己。',
+      energy: 100,
+      generation: 0,
+      parents: [],
+      socialCircle: { friends: [], family: [], partner: null },
+      intimacyMap: {},
+      shape: divineShape,
+    };
+    saveManualTrees([...existingStored.filter((e) => e.id !== id), newEntry], ownerId);
+
+    window.setTimeout(() => {
+      const plantedAgent = useForestStore.getState().agents.find((agent) => agent.id === id);
+      if (plantedAgent) {
+        void upsertTreeProfile(plantedAgent);
+      }
+    }, 0);
+
     triggerGlobalSilence(3000, '造物主降下了新的生命，万物静听。', id);
     triggerDivineSurge(10_000);
-    playManualFirstHeartbeat();
+  playManualFirstHeartbeat();
+    setDivineBloom({ id, x, y: clampedY });
+    window.setTimeout(() => setDivineBloom((current) => (current?.id === id ? null : current)), 1400);
     setCelestialEffect(Math.random() < 0.5 ? 'meteor' : 'aurora');
     window.setTimeout(() => setCelestialEffect(null), 10_000);
-    showTreeNotice('神启之树降临', '造物主亲手种下，万物肃穆', '⚡', 10_000, id);
+    showTreeNotice(`${finalPersonality}之树降临`, `「${finalName}」已种入森林`, '✨', 10_000, id, 'divine');
 
     setNewTreeId(id);
     setPlantingImage(null);
+    setPlantingDrawingData(null);
+    setPlantingTreeName('');
+    setPlantingPersonality('');
     setTimeout(() => setNewTreeId(null), 3500);
-  }, [addTree, plantingImage, playManualFirstHeartbeat, scrollX, showTreeNotice, triggerDivineSurge, triggerGlobalSilence, username, worldWidth]);
+  }, [addTree, plantingImage, plantingDrawingData, plantingTreeName, plantingPersonality, playManualFirstHeartbeat, scrollX, showTreeNotice, triggerDivineSurge, triggerGlobalSilence, username, worldWidth]);
+
+  // Restore manually-planted trees from localStorage on mount.
+  // This runs before the sample-trees effect so the sample-trees merge won't overwrite them.
+  useEffect(() => {
+    const ownerId = loadSecondMeSession()?.user?.userId ?? null;
+    const stored = loadManualTrees(ownerId);
+    if (stored.length === 0) return;
+
+    const { addTree: storeAddTree } = useForestStore.getState();
+    const restored: TreeData[] = stored.map((entry) => {
+      storeAddTree({
+        id: entry.id,
+        position: { x: entry.worldX, y: entry.worldY },
+        scale: 1,
+        zIndex: Math.floor(entry.worldY),
+        name: entry.name,
+        tag: entry.tag,
+        personality: entry.personality,
+        metadata: {
+          bio: entry.bio,
+          lastWords: entry.lastWords,
+          drawingImageData: entry.imageData,
+        },
+        energy: entry.energy,
+        generation: entry.generation,
+        parents: entry.parents,
+        socialCircle: entry.socialCircle,
+        intimacyMap: entry.intimacyMap,
+        isManual: true,
+        shape: entry.shape,
+      });
+      return {
+        id: entry.id,
+        imageData: entry.imageData,
+        x: entry.x,
+        y: entry.y,
+        size: entry.size,
+        spawnType: 'manual' as const,
+      };
+    });
+
+    setTrees((prev) => {
+      const existingIds = new Set(prev.map((t) => t.id));
+      const newOnes = restored.filter((t) => !existingIds.has(t.id));
+      return newOnes.length > 0 ? [...prev, ...newOnes] : prev;
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (authInitializing || !username) return;
+
+    const ownerId = loadSecondMeSession()?.user?.userId ?? null;
+    if (!ownerId || remoteRestoreOwnerRef.current === ownerId) return;
+    remoteRestoreOwnerRef.current = ownerId;
+
+    let cancelled = false;
+
+    const restoreRemoteTrees = async () => {
+      const profiles = await fetchAllTreeProfiles();
+      if (cancelled || profiles.length === 0) return;
+
+      const existingAgentIds = new Set(useForestStore.getState().agents.map((agent) => agent.id));
+      const { addTree: storeAddTree } = useForestStore.getState();
+      const restoredEntries: PersistedManualTreeEntry[] = [];
+      const restoredTrees: TreeData[] = [];
+
+      for (const profile of profiles) {
+        if (!profile.isManual || !profile.drawingImageData || existingAgentIds.has(profile.treeId)) continue;
+
+        const sceneState = (profile.metadata.sceneState ?? {}) as Record<string, unknown>;
+        const renderSize = Number(sceneState.renderSize ?? 0);
+        const positionX = Number(sceneState.positionX ?? 0);
+        const positionY = Number(sceneState.positionY ?? 0);
+        if (!Number.isFinite(renderSize) || renderSize <= 0) continue;
+        if (!Number.isFinite(positionX) || !Number.isFinite(positionY)) continue;
+
+        const tag = typeof profile.metadata.tag === 'string' ? profile.metadata.tag : undefined;
+
+        storeAddTree({
+          id: profile.treeId,
+          position: { x: positionX, y: positionY },
+          scale: 1,
+          zIndex: Math.floor(positionY),
+          name: profile.name,
+          tag,
+          personality: profile.personality,
+          metadata: {
+            bio: profile.bio,
+            lastWords: profile.lastWords,
+            drawingImageData: profile.drawingImageData,
+            drawingData: profile.drawingData as any,
+          },
+          energy: profile.energy,
+          generation: profile.generation,
+          parents: profile.parents,
+          socialCircle: profile.socialCircle as any,
+          intimacyMap: profile.intimacyMap,
+          isManual: true,
+        });
+
+        existingAgentIds.add(profile.treeId);
+        restoredTrees.push({
+          id: profile.treeId,
+          imageData: profile.drawingImageData,
+          x: positionX - renderSize / 2,
+          y: positionY - renderSize,
+          size: renderSize,
+          spawnType: 'manual',
+        });
+        restoredEntries.push({
+          id: profile.treeId,
+          imageData: profile.drawingImageData,
+          x: positionX - renderSize / 2,
+          y: positionY - renderSize,
+          size: renderSize,
+          worldX: positionX,
+          worldY: positionY,
+          name: profile.name,
+          tag,
+          personality: profile.personality,
+          bio: profile.bio,
+          lastWords: profile.lastWords,
+          energy: profile.energy,
+          generation: profile.generation,
+          parents: profile.parents,
+          socialCircle: profile.socialCircle as { friends: string[]; family: string[]; partner: string | null },
+          intimacyMap: profile.intimacyMap,
+        });
+      }
+
+      if (cancelled || restoredTrees.length === 0) return;
+
+      setTrees((prev) => {
+        const existingTreeIds = new Set(prev.map((tree) => tree.id));
+        const additions = restoredTrees.filter((tree) => !existingTreeIds.has(tree.id));
+        return additions.length > 0 ? [...prev, ...additions] : prev;
+      });
+
+      const localEntries = loadManualTrees(ownerId);
+      saveManualTrees(
+        [
+          ...localEntries.filter((entry) => !restoredEntries.some((restored) => restored.id === entry.id)),
+          ...restoredEntries,
+        ],
+        ownerId,
+      );
+    };
+
+    void restoreRemoteTrees();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authInitializing, username]);
 
   // Initial sample trees: clustered groves + legacy anchor trees
   useEffect(() => {
@@ -829,6 +2284,7 @@ export default function Index() {
         scale: 1,
         zIndex: Math.floor(p.cy),
         name: profile.name,
+        tag: profile.tag,
         personality: profile.personality,
         metadata: profile.metadata,
         energy: Math.floor(40 + Math.random() * 50),
@@ -842,6 +2298,46 @@ export default function Index() {
         y: p.cy - p.size,
         size: p.size,
         spawnType: 'ambient' as const,
+      };
+    });
+
+    // Generate 6 divine trees in special positions
+    const DIVINE_TREE_COUNT = 6;
+    const divineTrees: TreeData[] = Array.from({ length: DIVINE_TREE_COUNT }, (_, i) => {
+      const angle = (i / DIVINE_TREE_COUNT) * Math.PI * 2;
+      const radius = w * 0.20; // Radius from center
+      const centerX = w * 0.5;
+      const centerY = h * 0.65;
+      
+      const size = 94 + Math.random() * 32;
+      const x = centerX + Math.cos(angle) * radius;
+      const y = centerY + Math.sin(angle) * radius * 0.6; // Ellipse shape
+      
+      const id = `divine-${i}`;
+      const fallbackShape = pickShapeByWorldEcology(x, w);
+      const imageData = renderTreeShapeToDataUrl(fallbackShape);
+      const profile = generateRandomProfile({ x, worldWidth: w, forcedPersonality: '神启' });
+
+      addTree({
+        id,
+        position: { x, y },
+        scale: 1,
+        zIndex: Math.floor(y),
+        name: profile.name,
+        tag: profile.tag,
+        personality: profile.personality,
+        metadata: profile.metadata,
+        energy: Math.floor(70 + Math.random() * 30), // Divine trees have higher energy
+        shape: fallbackShape,
+      });
+
+      return {
+        id,
+        imageData,
+        x: x - size / 2,
+        y: y - size,
+        size,
+        spawnType: 'ambient',
       };
     });
 
@@ -862,6 +2358,7 @@ export default function Index() {
         scale: 1,
         zIndex: Math.floor(y),
         name: profile.name,
+        tag: profile.tag,
         personality: profile.personality,
         metadata: profile.metadata,
         energy: Math.floor(40 + Math.random() * 50),
@@ -878,9 +2375,14 @@ export default function Index() {
       };
     });
 
-    const sampleTrees = [...clusteredTrees, ...legacyAnchorTrees];
+    const sampleTrees = [...clusteredTrees, ...divineTrees, ...legacyAnchorTrees];
 
-    setTrees(sampleTrees);
+    // Merge with any already-restored manual trees instead of replacing them.
+    setTrees((prev) => {
+      const existingIds = new Set(prev.map((t) => t.id));
+      const newSamples = sampleTrees.filter((t) => !existingIds.has(t.id));
+      return [...prev, ...newSamples];
+    });
   }, [maxPlantY, minPlantY, viewportWidth, worldWidth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleTrees = useMemo(() => {
@@ -891,6 +2393,29 @@ export default function Index() {
       return right >= -TREE_CULL_BUFFER && left <= viewportWidth + TREE_CULL_BUFFER;
     });
   }, [scrollX, trees, viewportWidth]);
+  const visibleAgentTrees = useMemo(() => {
+    const byTreeId = new Map(visibleTrees.map((tree) => [tree.id, tree]));
+    return agents
+      .map((agent) => {
+        const tree = byTreeId.get(agent.id);
+        if (!tree) return null;
+        return { tree, profile: agent };
+      })
+      .filter((entry): entry is { tree: TreeData; profile: (typeof agents)[number] } => Boolean(entry));
+  }, [agents, visibleTrees]);
+  const sceneInteractionOrigin = useMemo(() => {
+    if (!sceneInteractionEvent) return null;
+    const targetTree = trees.find((tree) => tree.id === sceneInteractionEvent.targetTreeId);
+    if (!targetTree) return null;
+    return {
+      x: targetTree.x + targetTree.size * 0.5 + scrollX,
+      y: targetTree.y + targetTree.size * 0.34,
+    };
+  }, [sceneInteractionEvent, scrollX, trees]);
+  const sceneInteractionPersonality = useMemo(() => {
+    if (!sceneInteractionEvent) return null;
+    return agents.find((agent) => agent.id === sceneInteractionEvent.targetTreeId)?.personality ?? null;
+  }, [agents, sceneInteractionEvent]);
   const visibleTreeIds = useMemo(() => visibleTrees.map((tree) => tree.id), [visibleTrees]);
 
   useEffect(() => {
@@ -941,6 +2466,7 @@ export default function Index() {
         listenerId: manualTree.id,
         message: GUARDIAN_MESSAGE,
         type: 'system',
+        source: 'auto',
       });
 
       if (!store.activeChat) {
@@ -990,7 +2516,7 @@ export default function Index() {
       <div className="watercolor-wash fixed inset-0" style={{ zIndex: -1 }} />
 
       <SummerTemporalEffects season={resolvedSeason} theme={theme} />
-      <WinterSeasonEffects season={resolvedSeason} weather={weather} />
+      <WinterSeasonEffects season={resolvedSeason} weather={resolvedWeather} />
       <BirdSeedFlyover season={resolvedSeason} />
 
       {/* World edge hints */}
@@ -1112,10 +2638,16 @@ export default function Index() {
               maxWidth: 360,
               borderRadius: 15,
               padding: '9px 14px 10px',
-              border: '1px solid rgba(122, 164, 136, 0.42)',
-              background: 'rgba(255, 255, 255, 0.74)',
+              border: treeNotice.variant === 'divine'
+                ? '1px solid rgba(210, 181, 112, 0.56)'
+                : '1px solid rgba(122, 164, 136, 0.42)',
+              background: treeNotice.variant === 'divine'
+                ? 'linear-gradient(145deg, rgba(255, 248, 226, 0.92), rgba(250, 237, 198, 0.86))'
+                : 'rgba(255, 255, 255, 0.74)',
               backdropFilter: 'blur(12px)',
-              boxShadow: '0 8px 24px rgba(44, 78, 58, 0.14)',
+              boxShadow: treeNotice.variant === 'divine'
+                ? '0 10px 28px rgba(146, 112, 38, 0.18), 0 0 0 1px rgba(255, 246, 214, 0.26) inset'
+                : '0 8px 24px rgba(44, 78, 58, 0.14)',
               cursor: treeNotice.treeId ? 'pointer' : 'default',
               textAlign: 'left',
             }}
@@ -1124,7 +2656,7 @@ export default function Index() {
             <div style={{ minWidth: 0 }}>
               <div
                 style={{
-                  color: 'hsl(146, 30%, 24%)',
+                  color: treeNotice.variant === 'divine' ? 'hsl(38, 42%, 24%)' : 'hsl(146, 30%, 24%)',
                   fontSize: 13,
                   fontWeight: 700,
                   lineHeight: 1.3,
@@ -1138,7 +2670,7 @@ export default function Index() {
               <div
                 style={{
                   marginTop: 2,
-                  color: 'rgba(68, 92, 78, 0.76)',
+                  color: treeNotice.variant === 'divine' ? 'rgba(117, 93, 48, 0.82)' : 'rgba(68, 92, 78, 0.76)',
                   fontSize: 11,
                   lineHeight: 1.3,
                   whiteSpace: 'nowrap',
@@ -1172,6 +2704,68 @@ export default function Index() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {divineBloom && (
+          <motion.div
+            key={divineBloom.id}
+            initial={{ opacity: 0, scale: 0.6 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="fixed pointer-events-none z-32"
+            style={{ left: divineBloom.x, top: divineBloom.y, transform: 'translate(-50%, -50%)' }}
+          >
+            <motion.div
+              initial={{ opacity: 0.85, scale: 0.35 }}
+              animate={{ opacity: 0, scale: 2.4 }}
+              transition={{ duration: 1.15, ease: 'easeOut' }}
+              style={{
+                position: 'absolute',
+                inset: -34,
+                borderRadius: '999px',
+                border: '1.5px solid rgba(242, 206, 120, 0.72)',
+                boxShadow: '0 0 24px rgba(252, 211, 77, 0.42)',
+              }}
+            />
+            <motion.div
+              initial={{ opacity: 0.9, scale: 0.4 }}
+              animate={{ opacity: 0, scale: 1.8 }}
+              transition={{ duration: 0.9, ease: 'easeOut' }}
+              style={{
+                position: 'absolute',
+                inset: -18,
+                borderRadius: '999px',
+                background: 'radial-gradient(circle, rgba(250, 239, 190, 0.88) 0%, rgba(245, 208, 92, 0.42) 42%, rgba(255,255,255,0) 72%)',
+                filter: 'blur(2px)',
+              }}
+            />
+            {Array.from({ length: 10 }).map((_, index) => {
+              const angle = (Math.PI * 2 * index) / 10;
+              const offsetX = Math.cos(angle) * 44;
+              const offsetY = Math.sin(angle) * 30;
+              return (
+                <motion.div
+                  key={`divine-bloom-${index}`}
+                  initial={{ opacity: 0, x: 0, y: 0, scale: 0.3 }}
+                  animate={{ opacity: [0, 1, 0], x: [0, offsetX], y: [0, offsetY], scale: [0.3, 1, 0.4] }}
+                  transition={{ duration: 1.05, ease: 'easeOut', delay: index * 0.02 }}
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    width: index % 2 === 0 ? 8 : 5,
+                    height: index % 2 === 0 ? 8 : 5,
+                    borderRadius: '999px',
+                    background: index % 2 === 0 ? 'rgba(252, 211, 77, 0.96)' : 'rgba(255, 247, 214, 0.95)',
+                    boxShadow: '0 0 10px rgba(252, 211, 77, 0.55)',
+                  }}
+                />
+              );
+            })}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <CelestialCelebration effect={celestialEffect} />
 
       {/* Camera-scaled scene layers */}
@@ -1192,7 +2786,7 @@ export default function Index() {
           theme={theme}
           colors={colors}
           season={resolvedSeason}
-          weather={weather}
+          weather={resolvedWeather}
           scrollX={scrollX}
           cameraZoom={cameraZoom}
           atmosphere={activeEcologyAtmosphere}
@@ -1208,8 +2802,7 @@ export default function Index() {
             transition: 'filter 300ms ease',
           }}
         >
-          {visibleTrees.map((tree) => {
-            const profile = agents.find((agent) => agent.id === tree.id);
+          {visibleAgentTrees.map(({ tree, profile }) => {
             return (
               <PlantedTree
                 key={tree.id}
@@ -1225,32 +2818,32 @@ export default function Index() {
                 agentId={tree.id}
                 profile={profile}
                 highlighted={focusedTreeId === tree.id}
+                active={activeDialogueAgentId === tree.id}
+                isAwaitingReply={activeDialogueAgentId === tree.id && profile.socialState === SocialState.TALKING}
+                shakePromptSignal={treeShakePromptSignalById[tree.id] ?? 0}
+                onTreeClick={handleTreeActivate}
               />
             );
           })}
 
-          <TreePerchedBirds season={resolvedSeason} trees={visibleTrees} />
+          <TreePerchedBirds season={resolvedSeason} trees={visibleTrees} interactionEvent={sceneInteractionEvent} />
 
           <AgentLink
             agents={agents}
-            sceneTrees={visibleTrees.map((tree) => ({
-              id: tree.id,
-              x: tree.x,
-              y: tree.y,
-              size: tree.size,
-              scale: 1,
-              zIndex: 0,
-            }))}
+            visibleTreeIds={visibleTreeIds}
           />
         </div>
 
         {/* Particles */}
         <Particles
           colors={colors}
-          weather={weather}
+          weather={resolvedWeather}
           season={resolvedSeason}
           emissionRateMultiplier={emissionRateMultiplier}
           atmosphere={activeEcologyAtmosphere}
+          interactionEvent={sceneInteractionEvent}
+          interactionOrigin={sceneInteractionOrigin}
+          interactionPersonality={sceneInteractionPersonality}
         />
       </div>
 
@@ -1308,8 +2901,8 @@ export default function Index() {
               color: 'hsl(28,28%,26%)',
             }}
           >
-            <span>{seasonOptions.find(o => o.value === season)!.icon}</span>
-            <span>{seasonOptions.find(o => o.value === season)!.label}</span>
+            <span>{seasonButtonOption.icon}</span>
+            <span>{seasonButtonOption.label}</span>
           </motion.button>
           <AnimatePresence>
             {openPopover === 'season' && (
@@ -1330,7 +2923,7 @@ export default function Index() {
                 }}
               >
                 <div className="font-ui text-[10px] mb-2" style={{ color: 'hsl(28,18%,46%)' }}>
-                  {seasonHintMap[season]}
+                  {seasonHintMap[season]}{season === 'auto' ? ` · 当前 ${seasonButtonOption.label}` : ''}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {seasonOptions.map(opt => {
@@ -1382,8 +2975,8 @@ export default function Index() {
               color: 'hsl(205,28%,26%)',
             }}
           >
-            <span>{weatherOptions.find(o => o.value === weather)!.icon}</span>
-            <span>{weatherOptions.find(o => o.value === weather)!.label}</span>
+            <span>{weatherButtonOption.icon}</span>
+            <span>{weatherButtonOption.label}</span>
           </motion.button>
           <AnimatePresence>
             {openPopover === 'weather' && (
@@ -1404,16 +2997,16 @@ export default function Index() {
                 }}
               >
                 <div className="font-ui text-[10px] mb-2" style={{ color: 'hsl(205,18%,46%)' }}>
-                  {weatherHintMap[weather]}
+                  {weatherHintMap[weatherMode]}{weatherMode === 'auto' ? ` · 当前 ${weatherButtonOption.label}` : ''}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {weatherOptions.map(opt => {
-                    const active = weather === opt.value;
+                    const active = weatherMode === opt.value;
                     return (
                       <motion.button
                         key={opt.value}
                         type="button"
-                        onClick={() => { setWeather(opt.value); setOpenPopover(null); }}
+                        onClick={() => { setWeatherMode(opt.value); setOpenPopover(null); }}
                         whileTap={{ scale: 0.95 }} whileHover={{ y: -1 }}
                         className="font-ui text-xs flex items-center gap-1"
                         style={{
@@ -1456,8 +3049,8 @@ export default function Index() {
               color: 'hsl(232,28%,28%)',
             }}
           >
-            <span>{timeOptions.find(o => o.value === timeMode)!.icon}</span>
-            <span>{timeOptions.find(o => o.value === timeMode)!.label}</span>
+            <span>{timeButtonOption.icon}</span>
+            <span>{timeButtonOption.label}</span>
           </motion.button>
           <AnimatePresence>
             {openPopover === 'time' && (
@@ -1478,7 +3071,7 @@ export default function Index() {
                 }}
               >
                 <div className="font-ui text-[10px] mb-2" style={{ color: 'hsl(232,18%,46%)' }}>
-                  {timeHintMap[timeMode]}
+                  {timeHintMap[timeMode]}{timeMode === 'auto' ? ` · 当前 ${timeButtonOption.label}` : ''}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {timeOptions.map(opt => {
@@ -1529,10 +3122,19 @@ export default function Index() {
         messages={chatHistory}
         agents={agents}
         collapsed={chatCollapsed}
+        currentUserName={username}
         onToggleCollapsed={() => setChatCollapsed((v) => !v)}
         onSelectMessage={handleSelectChatMessage}
         onFocusTree={focusTreeById}
+        onClearFocusedTree={() => setActiveDialogueAgent(null)}
+        onSendMessage={handleSendMessageToTree}
+        onSendSocialMessage={handleSendSocialMessage}
+        activeTreeId={activeDialogueAgentId}
+        focusInputSignal={chatInputFocusSignal}
+        showComposer
       />
+
+      {/* <BgmAutoplayBlockedToast /> */}
 
       <BgmMushroom
         audioUrl={FOREST_BGM_AUDIO_URL}
@@ -1561,9 +3163,15 @@ export default function Index() {
             <div
               style={{
                 borderRadius: 18,
-                background: 'linear-gradient(145deg, rgba(246, 255, 248, 0.86), rgba(237, 252, 241, 0.92))',
-                border: '1px solid rgba(133, 176, 142, 0.5)',
-                boxShadow: '0 10px 28px rgba(18, 58, 27, 0.2)',
+                background: authCelebration.variant === 'divine'
+                  ? 'linear-gradient(145deg, rgba(255, 248, 226, 0.92), rgba(250, 237, 198, 0.9))'
+                  : 'linear-gradient(145deg, rgba(246, 255, 248, 0.86), rgba(237, 252, 241, 0.92))',
+                border: authCelebration.variant === 'divine'
+                  ? '1px solid rgba(210, 181, 112, 0.58)'
+                  : '1px solid rgba(133, 176, 142, 0.5)',
+                boxShadow: authCelebration.variant === 'divine'
+                  ? '0 10px 28px rgba(146, 112, 38, 0.18)'
+                  : '0 10px 28px rgba(18, 58, 27, 0.2)',
                 backdropFilter: 'blur(9px)',
                 padding: '10px 16px 11px',
                 minWidth: 220,
@@ -1571,9 +3179,9 @@ export default function Index() {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 20, lineHeight: 1 }}>{authCelebration.emoji}</span>
-                <span style={{ fontSize: 16, color: 'hsl(136, 30%, 24%)' }}>{authCelebration.title}</span>
+                <span style={{ fontSize: 16, color: authCelebration.variant === 'divine' ? 'hsl(38, 42%, 24%)' : 'hsl(136, 30%, 24%)' }}>{authCelebration.title}</span>
               </div>
-              <div style={{ marginTop: 4, fontSize: 12, color: 'rgba(37, 76, 45, 0.76)' }}>
+              <div style={{ marginTop: 4, fontSize: 12, color: authCelebration.variant === 'divine' ? 'rgba(117, 93, 48, 0.82)' : 'rgba(37, 76, 45, 0.76)' }}>
                 {authCelebration.sub}
               </div>
             </div>
@@ -1602,7 +3210,7 @@ export default function Index() {
       />
 
       {/* Wind Chime */}
-      <WindChime username={username} onAuthAction={handleLoginEntry} loginPulse={loginPulse} />
+      <WindChime username={username} onAuthAction={handleLoginEntry} loginPulse={loginPulse} interactionEvent={sceneInteractionEvent} />
 
       {/* Seed Button */}
       <SeedButton

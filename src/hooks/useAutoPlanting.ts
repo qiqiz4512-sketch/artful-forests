@@ -5,7 +5,7 @@ import { useForestStore } from '@/stores/useForestStore';
 import { pickShapeByWorldEcology } from '@/lib/worldEcology';
 import { TreeShapePreset } from '@/constants/treeShapes';
 import { TreeProfile } from '@/lib/agentProfile';
-import { areBloodRelated, buildChildShape, clamp, isAdult, normalizePersonality } from '@/lib/treeSociety';
+import { buildChildShape, calculatePartnerCompatibility, clamp, normalizePersonality } from '@/lib/treeSociety';
 import { TreeAgent } from '@/types/forest';
 
 export interface AutoPlantedTreePayload {
@@ -185,33 +185,31 @@ export function useAutoPlanting(options: UseAutoPlantingOptions = {}) {
     }
 
     const idToAgent = new Map(agents.map((agent) => [agent.id, agent]));
-    const candidates: Array<{ a: TreeAgent; b: TreeAgent; intimacy: number }> = [];
+    const candidates: Array<{ a: TreeAgent; b: TreeAgent; intimacy: number; compatibility: number }> = [];
 
     agents.forEach((a) => {
       a.neighbors.forEach((neighborId) => {
         const b = idToAgent.get(neighborId);
         if (!b || a.id >= b.id) return;
         const intimacy = Math.min(a.intimacyMap[b.id] ?? 0, b.intimacyMap[a.id] ?? 0);
-        if (intimacy < 90) return;
-        if (!isAdult(a) || !isAdult(b)) return;
-        if (areBloodRelated(a, b, idToAgent)) return;
-
-        const partnerMatch =
-          (!a.socialCircle.partner || a.socialCircle.partner === b.id)
-          && (!b.socialCircle.partner || b.socialCircle.partner === a.id);
-        if (!partnerMatch) return;
+        const compatibility = calculatePartnerCompatibility(a, b, idToAgent, w);
+        if (!compatibility.eligibleForBreeding) return;
 
         const pairKey = getPairKey(a.id, b.id);
         const lastPairBirthAt = pairBirthAtRef.current[pairKey] ?? 0;
         if (now - lastPairBirthAt < PAIR_BIRTH_COOLDOWN_MS) return;
 
-        candidates.push({ a, b, intimacy });
+        candidates.push({ a, b, intimacy, compatibility: compatibility.total });
       });
     });
 
     if (candidates.length === 0) return false;
 
-    const pair = candidates[Math.floor(Math.random() * candidates.length)];
+    candidates.sort((left, right) => {
+      if (right.compatibility !== left.compatibility) return right.compatibility - left.compatibility;
+      return right.intimacy - left.intimacy;
+    });
+    const pair = candidates[0];
     const x = clamp((pair.a.position.x + pair.b.position.x) * 0.5 + randomInRange(-24, 24), 0, w);
     const y = clamp((pair.a.position.y + pair.b.position.y) * 0.5 + randomInRange(-8, 10), h * minYRatio, h * maxYRatio);
 

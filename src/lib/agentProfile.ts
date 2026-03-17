@@ -3,8 +3,18 @@ import { getWorldEcologyHabitatLine, getWorldEcologyZone } from '@/lib/worldEcol
 
 const NON_SHY_PERSONALITIES: TreePersonality[] = ['温柔', '睿智', '顽皮'];
 
-const NAME_PREFIXES = ['青', '雾', '岚', '溪', '松', '杉', '芽', '木', '风', '云', '星', '露'];
-const NAME_SUFFIXES = ['语', '眠', '灯', '歌', '影', '桥', '叶', '石', '舟', '丘', '枝', '心'];
+const NAME_PREFIXES = ['青', '雾', '岚', '溪', '松', '杉', '芽', '木', '风', '云', '星', '露', '石', '叶', '山'];
+const NAME_SUFFIXES = ['语', '眠', '灯', '歌', '影', '桥', '叶', '石', '舟', '丘', '枝', '心', '川', '林', '雨'];
+
+// 根据性格生成对应的社会标签
+const TAG_LIBRARY: Record<TreePersonality, string[]> = {
+  温柔: ['佛系养生博主', '长期主义者', '云端漂泊者', '慢生活倡导人'],
+  睿智: ['清醒老巨人', '深度思考者', '哲学观察员', '根系智者'],
+  顽皮: ['脆皮大学生', '尊嘟假嘟', '全林最野的崽', '麻烦制造机器', '快乐捣蛋鬼'],
+  活泼: ['社牛树', '热情加速器', '林间活力家', '显眼包大户'],
+  社恐: ['i树人', '咸鱼树', '别点我报警了', '沉默是金爱好者', '独处治愈师'],
+  神启: ['甲方爸爸的树', '这个树很City', '神性肃静', '宇宙选中的树', '创世见证者'],
+};
 
 const BIO_LIBRARY: Record<TreePersonality, string[]> = {
   温柔: [
@@ -44,6 +54,7 @@ const randomFrom = <T,>(items: T[]): T => items[Math.floor(Math.random() * items
 
 export interface TreeProfile {
   name: string;
+  tag?: string;
   personality: string;
   metadata: {
     bio: string;
@@ -56,6 +67,7 @@ export interface TreeProfile {
 interface GenerateRandomProfileOptions {
   x?: number;
   worldWidth?: number;
+  forcedPersonality?: string;
 }
 
 export function generateRandomProfile(options: GenerateRandomProfileOptions = {}): TreeProfile {
@@ -66,26 +78,33 @@ export function generateRandomProfile(options: GenerateRandomProfileOptions = {}
       : paceRoll < CHATTERBOX_CHANCE + NORMAL_TALKER_CHANCE
         ? 'normal'
         : 'shy';
-  const personality = speakingPace === 'shy' ? '社恐' : randomFrom(NON_SHY_PERSONALITIES);
-  const name = `${randomFrom(NAME_PREFIXES)}${randomFrom(NAME_SUFFIXES)}${Math.floor(10 + Math.random() * 90)}`;
+  const personality = options.forcedPersonality || (speakingPace === 'shy' ? '社恐' : randomFrom(NON_SHY_PERSONALITIES));
+  const name = `${randomFrom(NAME_PREFIXES)}${randomFrom(NAME_SUFFIXES)}`; // 移除数字，只保留名字
+  const tag = randomFrom(TAG_LIBRARY[personality as TreePersonality] || TAG_LIBRARY['温柔']);
   const chatterbox = speakingPace === 'chatterbox';
   const hasWorldContext = typeof options.x === 'number' && typeof options.worldWidth === 'number';
   const ecologyPrefix = hasWorldContext
     ? `${getWorldEcologyZone(options.x!, options.worldWidth!).label}的树。`
     : '';
   const habitatLine = hasWorldContext ? getWorldEcologyHabitatLine(options.x!, options.worldWidth!) : '';
-  const baseBio = randomFrom(BIO_LIBRARY[personality]);
+  const baseBio = randomFrom(BIO_LIBRARY[personality as TreePersonality]);
   const chatterboxLine = chatterbox ? '这棵树有点话痨，见到邻居就想聊两句。' : '';
   const shyLine = speakingPace === 'shy' ? '天生偏社恐，通常很久才会开口一次。' : '';
 
   return {
     name,
+    tag,
     personality,
     metadata: {
       bio: [ecologyPrefix, habitatLine, chatterboxLine, shyLine, baseBio].filter(Boolean).join(' '),
-      lastWords: randomFrom(LAST_WORDS_LIBRARY[personality]),
+      lastWords: randomFrom(LAST_WORDS_LIBRARY[personality as TreePersonality]),
       chatterbox,
       speakingPace,
     },
   };
+}
+
+/** 根据性格获取随机社会标签 */
+export function getRandomTagByPersonality(personality: string): string {
+  return randomFrom(TAG_LIBRARY[personality as TreePersonality] || TAG_LIBRARY['温柔']);
 }

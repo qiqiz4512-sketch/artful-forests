@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useBgmAudio } from '@/components/BgmAudioProvider';
 
 interface BgmMushroomProps {
   audioUrl?: string;
@@ -14,6 +15,29 @@ interface BgmMushroomProps {
 const DEFAULT_TARGET_VOLUME = 0.35;
 const DEFAULT_FADE_IN_MS = 1200;
 const DEFAULT_FADE_OUT_MS = 800;
+const INITIAL_AUTOPLAY_RETRY_MS = 240;
+const MAX_AUTOPLAY_RETRY_ATTEMPTS = 12;
+
+const prepareInlineAudioPlayback = (audio: HTMLAudioElement) => {
+  audio.setAttribute('playsinline', 'true');
+  audio.setAttribute('webkit-playsinline', 'true');
+};
+
+/** 尝试通过创建并立即 resume 一个 AudioContext 来解锁浏览器音频权限 */
+const tryResumeAudioContext = () => {
+  const AudioCtor =
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtor) return;
+  try {
+    const ctx = new AudioCtor();
+    // 尝试恢复，catch任何NotAllowedError
+    void ctx.resume().catch(() => {});
+    window.setTimeout(() => void ctx.close().catch(() => {}), 1500);
+  } catch {
+    // 忽略不支持的环境或者被浏览器拦截的情况
+  }
+};
 
 export default function BgmMushroom({
   audioUrl = '',
@@ -25,45 +49,68 @@ export default function BgmMushroom({
   fadeInDurationMs = DEFAULT_FADE_IN_MS,
   fadeOutDurationMs = DEFAULT_FADE_OUT_MS,
 }: BgmMushroomProps) {
+  const bgmAudio = useBgmAudio();
+  const setIsAutoplayBlocked = bgmAudio?.setIsAutoplayBlocked;
   const [isPlaying, setIsPlaying] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [iconAvailable, setIconAvailable] = useState(true);
   const [iceCrackPulse, setIceCrackPulse] = useState(0);
   const [awaitingAutoResume, setAwaitingAutoResume] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [bootMuted, setBootMuted] = useState(autoPlay);
+
+  // 将本地拦截状态同步到全局 BgmAudioContext，供 Index.tsx 读取
+  useEffect(() => {
+    setIsAutoplayBlocked?.(awaitingAutoResume);
+  }, [awaitingAutoResume, setIsAutoplayBlocked]);
+  const localAudioRef = useRef<HTMLAudioElement | null>(null);
   const fadeRafRef = useRef<number | null>(null);
   const birdLoopTimerRef = useRef<number | null>(null);
+  const autoResumeTimerRef = useRef<number | null>(null);
+  const autoResumeAttemptRef = useRef(0);
   const hasAttemptedAutoPlayRef = useRef(false);
+  const audioRef = bgmAudio?.audioRef ?? localAudioRef;
+
+  const clearAutoResumeTimer = useCallback(() => {
+    if (autoResumeTimerRef.current !== null) {
+      window.clearTimeout(autoResumeTimerRef.current);
+      autoResumeTimerRef.current = null;
+    }
+  }, []);
 
   const playIceCrack = useCallback(() => {
     const AudioCtor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtor) return;
-    const ctx = new AudioCtor();
-    const now = ctx.currentTime;
+    try {
+      const ctx = new AudioCtor();
+      const now = ctx.currentTime;
 
-    const ping = (freq: number, delay: number, dur: number, gainPeak: number) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(freq, now + delay);
-      osc.frequency.exponentialRampToValueAtTime(freq * 1.38, now + delay + dur * 0.2);
-      osc.frequency.exponentialRampToValueAtTime(freq * 0.74, now + delay + dur);
-      gain.gain.setValueAtTime(0.0001, now + delay);
-      gain.gain.exponentialRampToValueAtTime(gainPeak, now + delay + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + dur);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + delay);
-      osc.stop(now + delay + dur + 0.02);
-    };
+      const ping = (freq: number, delay: number, dur: number, gainPeak: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, now + delay);
+        osc.frequency.exponentialRampToValueAtTime(freq * 1.38, now + delay + dur * 0.2);
+        osc.frequency.exponentialRampToValueAtTime(freq * 0.74, now + delay + dur);
+        gain.gain.setValueAtTime(0.0001, now + delay);
+        gain.gain.exponentialRampToValueAtTime(gainPeak, now + delay + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + delay + dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + delay);
+        osc.stop(now + delay + dur + 0.02);
+      };
 
-    ping(1200, 0, 0.14, 0.06);
-    ping(1840, 0.04, 0.12, 0.04);
-    ping(980, 0.08, 0.16, 0.035);
+      ping(1200, 0, 0.14, 0.06);
+      ping(1840, 0.04, 0.12, 0.04);
+      ping(980, 0.08, 0.16, 0.035);
 
-    window.setTimeout(() => {
-      void ctx.close();
-    }, 520);
+      window.setTimeout(() => {
+        void ctx.close();
+      }, 520);
+    } catch (error) {
+      // AudioContext 创建失败或被拦截（如NotAllowedError）
+      // 忽略错误继续执行
+    }
   }, []);
 
   const playBirdChirp = useCallback(() => {
@@ -115,25 +162,59 @@ export default function BgmMushroom({
   }, [iconUrl]);
 
   useEffect(() => {
-    if (!audioUrl) {
-      audioRef.current = null;
+    if (bgmAudio || !audioUrl) {
       return;
     }
 
     const audio = new Audio(audioUrl);
     audio.preload = 'auto';
     audio.loop = true;
+    audio.muted = autoPlay;
+    audio.defaultMuted = autoPlay;
     audio.volume = 0;
-    audioRef.current = audio;
+    prepareInlineAudioPlayback(audio);
+    localAudioRef.current = audio;
 
+    return () => {
+      audio.pause();
+      audio.currentTime = 0;
+      localAudioRef.current = null;
+    };
+  }, [audioUrl, autoPlay, bgmAudio]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    audio.loop = true;
+    audio.preload = 'auto';
+    prepareInlineAudioPlayback(audio);
+    audio.muted = bootMuted;
+    audio.defaultMuted = bootMuted;
+  }, [audioRef, bootMuted]);
+
+  useEffect(() => {
+    setBootMuted(autoPlay);
+    hasAttemptedAutoPlayRef.current = false;
+  }, [autoPlay, audioUrl]);
+
+  useEffect(() => {
     return () => {
       if (fadeRafRef.current !== null) {
         window.cancelAnimationFrame(fadeRafRef.current);
       }
-      audio.pause();
-      audioRef.current = null;
+
+      clearAutoResumeTimer();
+
+      const audio = audioRef.current;
+      if (audio) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
     };
-  }, [audioUrl]);
+  }, [audioRef, clearAutoResumeTimer]);
 
   const fadeVolume = useCallback((nextVolume: number, durationMs: number, onDone?: () => void) => {
     const audio = audioRef.current;
@@ -165,8 +246,64 @@ export default function BgmMushroom({
     fadeRafRef.current = window.requestAnimationFrame(step);
   }, []);
 
+  const fadeToAudiblePlayback = useCallback(async () => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    setBootMuted(false);
+    audio.muted = false;
+    audio.defaultMuted = false;
+    audio.volume = 0;
+    prepareInlineAudioPlayback(audio);
+
+    if (audio.readyState === HTMLMediaElement.HAVE_NOTHING) {
+      audio.load();
+    }
+
+    // 如果音频已经在播放（muted autoplay 成功），无需再调用 play()。
+    // 重复调用 play() 时浏览器会以当前 muted=false 状态重新评估自动播放策略，
+    // 可能 reject —— 直接跳过即可，此时 muted=false 已起效，淡入音量即可。
+    if (audio.paused) {
+      await audio.play();
+    }
+
+    autoResumeAttemptRef.current = 0;
+    fadeVolume(Math.max(0, Math.min(1, targetVolume)), fadeInDurationMs);
+    setAwaitingAutoResume(false);
+  }, [fadeInDurationMs, fadeVolume, targetVolume]);
+
+  const queueAutoResumeAttempt = useCallback((delayMs = INITIAL_AUTOPLAY_RETRY_MS) => {
+    clearAutoResumeTimer();
+    autoResumeTimerRef.current = window.setTimeout(() => {
+      autoResumeTimerRef.current = null;
+      const audio = audioRef.current;
+      if (!audio || audio.paused || !audio.muted) {
+        return;
+      }
+
+      void (async () => {
+        try {
+          await fadeToAudiblePlayback();
+        } catch {
+          autoResumeAttemptRef.current += 1;
+          if (autoResumeAttemptRef.current >= MAX_AUTOPLAY_RETRY_ATTEMPTS) {
+            setAwaitingAutoResume(true);
+            return;
+          }
+
+          queueAutoResumeAttempt(Math.min(1800, INITIAL_AUTOPLAY_RETRY_MS * (autoResumeAttemptRef.current + 1)));
+        }
+      })();
+    }, delayMs);
+  }, [audioRef, clearAutoResumeTimer, fadeToAudiblePlayback]);
+
   const startPlayback = useCallback(async (triggeredByAutoPlay = false) => {
     const audio = audioRef.current;
+
+    clearAutoResumeTimer();
+    autoResumeAttemptRef.current = 0;
 
     setIsPlaying(true);
     if (variant === 'winter') {
@@ -179,32 +316,66 @@ export default function BgmMushroom({
     }
 
     try {
-      audio.volume = 0;
-      await audio.play();
-      fadeVolume(Math.max(0, Math.min(1, targetVolume)), fadeInDurationMs);
-      setAwaitingAutoResume(false);
-    } catch {
       if (triggeredByAutoPlay) {
-        setIsPlaying(false);
-        setAwaitingAutoResume(true);
+        // 静音启动策略：浏览器允许 muted autoplay；
+        // 一旦 play() 成功（audio 已在播放），立即解除静音——
+        // 此时不触发新的 play() 请求，浏览器不会再次拦截。
+        audio.muted = true;
+        audio.defaultMuted = true;
+        audio.volume = 0;
+        prepareInlineAudioPlayback(audio);
+        if (audio.readyState === HTMLMediaElement.HAVE_NOTHING) {
+          audio.load();
+        }
+        await audio.play(); // muted 播放，浏览器几乎总是放行
+        // 已在播放中：直接解除静音并淡入，不会触发新拦截
+        setBootMuted(false);
+        audio.muted = false;
+        audio.defaultMuted = false;
+        setAwaitingAutoResume(false);
+        autoResumeAttemptRef.current = 0;
+        fadeVolume(Math.max(0, Math.min(1, targetVolume)), fadeInDurationMs);
+        return;
       }
+
+      await fadeToAudiblePlayback();
+    } catch {
+      audio.muted = false;
+      setIsPlaying(false);
+      // 无论是 autoPlay 路径还是用户手势路径，播放失败时都回到等待用户交互状态
+      setAwaitingAutoResume(true);
     }
-  }, [fadeInDurationMs, fadeVolume, playIceCrack, targetVolume, variant]);
+  }, [audioRef, clearAutoResumeTimer, fadeInDurationMs, fadeToAudiblePlayback, fadeVolume, playIceCrack, targetVolume, variant]);
 
   const stopPlayback = useCallback(() => {
     const audio = audioRef.current;
+    clearAutoResumeTimer();
+    autoResumeAttemptRef.current = 0;
     setIsPlaying(false);
     setAwaitingAutoResume(false);
+    setBootMuted(false);
 
     if (!audio) {
       return;
     }
 
     fadeVolume(0, fadeOutDurationMs, () => {
+      audio.muted = false;
       audio.pause();
       audio.currentTime = 0;
     });
-  }, [fadeOutDurationMs, fadeVolume]);
+  }, [audioRef, clearAutoResumeTimer, fadeOutDurationMs, fadeVolume]);
+
+  const handleUnlockLayer = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio && !audio.paused) {
+      void fadeToAudiblePlayback();
+      return;
+    }
+
+    setAwaitingAutoResume(false);
+    void startPlayback(false);
+  }, [fadeToAudiblePlayback, startPlayback]);
 
   const handleToggle = useCallback(async () => {
     if (!isPlaying) {
@@ -220,28 +391,107 @@ export default function BgmMushroom({
       return;
     }
 
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
     hasAttemptedAutoPlayRef.current = true;
-    void startPlayback(true);
-  }, [autoPlay, startPlayback]);
+
+    // BgmAudioProvider 已经在更早阶段以静音模式启动了播放。
+    // 若 audio 已在播放（muted），直接进入解禁+淡入流程，无需再 play()。
+    // 若尚未播放（Provider 静音尝试失败），走 startPlayback(true) 兜底。
+    const autoPlayTimer = window.setTimeout(() => {
+      if (!audio.paused) {
+        // 已在静音播放中——直接解禁并设定 isPlaying
+        setIsPlaying(true);
+        void fadeToAudiblePlayback().catch(() => {
+          setIsPlaying(false);
+          setAwaitingAutoResume(true);
+        });
+      } else {
+        void startPlayback(true);
+      }
+    }, 150); // 充分延迟给 Provider 的 play() 完成
+
+    return () => {
+      window.clearTimeout(autoPlayTimer);
+    };
+  }, [autoPlay, audioRef, fadeToAudiblePlayback, startPlayback]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    const tryPromoteMutedPlayback = () => {
+      if (audio.paused || !audio.muted) {
+        return;
+      }
+
+      queueAutoResumeAttempt(120);
+    };
+
+    audio.addEventListener('play', tryPromoteMutedPlayback);
+    audio.addEventListener('canplay', tryPromoteMutedPlayback);
+    audio.addEventListener('canplaythrough', tryPromoteMutedPlayback);
+    audio.addEventListener('loadeddata', tryPromoteMutedPlayback);
+
+    return () => {
+      audio.removeEventListener('play', tryPromoteMutedPlayback);
+      audio.removeEventListener('canplay', tryPromoteMutedPlayback);
+      audio.removeEventListener('canplaythrough', tryPromoteMutedPlayback);
+      audio.removeEventListener('loadeddata', tryPromoteMutedPlayback);
+    };
+  }, [audioRef, queueAutoResumeAttempt]);
 
   useEffect(() => {
     if (!awaitingAutoResume) {
       return;
     }
 
+    let resumed = false;
     const resumePlayback = () => {
-      setAwaitingAutoResume(false);
-      void startPlayback(false);
+      if (resumed) {
+        return;
+      }
+      resumed = true;
+      // 注意：不在这里调用 tryResumeAudioContext() —— 它会消耗浏览器的 user activation token，
+      // 导致后续 audio.play() 被浏览器拦截。
+      // 也不在这里提前调用 setAwaitingAutoResume(false)，等 fadeToAudiblePlayback 成功后再设。
+      const audio = audioRef.current;
+      if (audio && !audio.paused) {
+        void fadeToAudiblePlayback().catch(() => {
+          resumed = false; // 允许重试
+        });
+        return;
+      }
+
+      void startPlayback(false).catch(() => {
+        resumed = false; // 允许重试
+      });
     };
 
-    window.addEventListener('pointerdown', resumePlayback, { once: true });
-    window.addEventListener('keydown', resumePlayback, { once: true });
+    const listenerOptions = { capture: true };
+
+    // 只监听真正的用户手势事件（Chrome/Safari 认可的 user activation triggers）。
+    // mousemove / pointermove / scroll / wheel 不属于 user activation，
+    // 一旦触发会消耗掉 awaitingAutoResume 状态却无法让 audio.play() 成功。
+    window.addEventListener('pointerdown', resumePlayback, listenerOptions);
+    window.addEventListener('keydown', resumePlayback, listenerOptions);
+    window.addEventListener('touchstart', resumePlayback, listenerOptions);
+    window.addEventListener('touchmove', resumePlayback, listenerOptions);
+    window.addEventListener('click', resumePlayback, listenerOptions);
 
     return () => {
-      window.removeEventListener('pointerdown', resumePlayback);
-      window.removeEventListener('keydown', resumePlayback);
+      window.removeEventListener('pointerdown', resumePlayback, listenerOptions);
+      window.removeEventListener('keydown', resumePlayback, listenerOptions);
+      window.removeEventListener('touchstart', resumePlayback, listenerOptions);
+      window.removeEventListener('touchmove', resumePlayback, listenerOptions);
+      window.removeEventListener('click', resumePlayback, listenerOptions);
     };
-  }, [awaitingAutoResume, startPlayback]);
+  }, [awaitingAutoResume, fadeToAudiblePlayback, startPlayback]);
 
   useEffect(() => {
     if (!isPlaying || !enableSpringBirds) {
@@ -274,12 +524,64 @@ export default function BgmMushroom({
     };
   }, [clearBirdLoopTimer, enableSpringBirds, isPlaying, playBirdChirp]);
 
+  // 在任何用户交互时尝试恢复播放
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const attemptAutoPlayRestore = () => {
+      if (audio.paused && !audio.muted) {
+        void audio.play().catch(() => {
+          // 忽略播放失败
+        });
+      }
+    };
+
+    // 绑定用户交互事件
+    document.addEventListener('click', attemptAutoPlayRestore, false);
+    document.addEventListener('touchstart', attemptAutoPlayRestore, false);
+    document.addEventListener('keydown', attemptAutoPlayRestore, false);
+
+    return () => {
+      document.removeEventListener('click', attemptAutoPlayRestore);
+      document.removeEventListener('touchstart', attemptAutoPlayRestore);
+      document.removeEventListener('keydown', attemptAutoPlayRestore);
+    };
+  }, [audioRef]);
+
   return (
     <div className="fixed left-4 bottom-20 sm:left-6 sm:bottom-24 z-40">
       <div className="relative">
         {awaitingAutoResume && (
+          <button
+            type="button"
+            className="bgm-unlock-layer"
+            aria-label="轻触页面进入森林并开启背景音乐"
+            onPointerDown={() => handleUnlockLayer()}
+            onClick={() => handleUnlockLayer()}
+            onKeyDown={() => handleUnlockLayer()}
+          />
+        )}
+
+        {audioUrl && (
+          !bgmAudio && (
+            <audio
+              ref={audioRef}
+              src={audioUrl}
+              preload="auto"
+              autoPlay={autoPlay}
+              loop
+              muted={bootMuted}
+              playsInline
+              className="hidden"
+              aria-hidden="true"
+            />
+          )
+        )}
+
+        {awaitingAutoResume && (
           <div className="bgm-autoplay-hint" role="status" aria-live="polite">
-            森林在等你轻轻唤醒
+            点击森林任意处，唤醒自然之声
           </div>
         )}
 
@@ -314,10 +616,13 @@ export default function BgmMushroom({
           onMouseLeave={() => setIsHovered(false)}
           onFocus={() => setIsHovered(true)}
           onBlur={() => setIsHovered(false)}
-          className={`bgm-mushroom ${isPlaying ? 'bgm-mushroom--playing' : ''} ${variant === 'winter' ? 'bgm-pinecone' : ''} ${variant === 'winter' && iceCrackPulse > 0 ? 'bgm-pinecone-crack' : ''}`}
+          className={`bgm-mushroom ${isPlaying ? 'bgm-mushroom--playing' : ''} ${awaitingAutoResume ? 'bgm-mushroom--blocked' : ''} ${variant === 'winter' ? 'bgm-pinecone' : ''} ${variant === 'winter' && iceCrackPulse > 0 ? 'bgm-pinecone-crack' : ''}`}
           aria-label={isPlaying ? '暂停森林背景音乐' : '播放森林背景音乐'}
           title={isPlaying ? '暂停森林背景音乐' : '播放森林背景音乐'}
         >
+          {awaitingAutoResume && (
+            <span className="bgm-blocked-badge" aria-hidden="true">点击唤醒</span>
+          )}
           {iconAvailable ? (
             <img
               src={iconUrl}

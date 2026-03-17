@@ -1,4 +1,7 @@
-import { TreeAgent } from '@/types/forest';
+import { getSlangGlobalRules, getSlangTagsForPersonality, getSlangTemplatesForPersonality } from '@/constants/forestSlangConfig';
+import { getPersonaLabel } from '@/constants/personaMatrix';
+import { getTreeIdentityGagBackground } from '@/constants/treeGags';
+import { ChatHistoryEntry, TreeAgent } from '@/types/forest';
 
 type RuntimeTone = 'gentle' | 'sage' | 'playful' | 'shy' | 'divine';
 
@@ -76,6 +79,12 @@ const sanitizeTaboo = (line: string): string => {
   return clampOutput(next);
 };
 
+const sanitizeLlmLine = (line: string): string =>
+  line
+    .replace(/\b(undefined|null)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 export const generateTreePersonaRuntime = (
   agent: Pick<TreeAgent, 'id' | 'name' | 'personality' | 'isManual'>,
 ): RuntimePersonaFlavor => {
@@ -132,4 +141,104 @@ export const applyTreePersonaFlavor = (
   }
 
   return sanitizeTaboo(next);
+};
+
+export type TreeRuntimeHistoryMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+export const buildRecentU2AHistory = (input: {
+  history: ChatHistoryEntry[];
+  targetTreeId: string;
+  userSpeakerId: string;
+  limit?: number;
+  excludeEntryId?: string;
+}): TreeRuntimeHistoryMessage[] => {
+  const limit = Math.max(1, Math.min(12, input.limit ?? 5));
+
+  const related = input.history
+    .filter((entry) => {
+      if (entry.id === input.excludeEntryId) return false;
+      const content = sanitizeLlmLine(entry.message ?? '');
+      if (!content) return false;
+
+      const involveTarget = entry.speakerId === input.targetTreeId || entry.listenerId === input.targetTreeId;
+      const involveUser = entry.speakerId === input.userSpeakerId || entry.listenerId === input.userSpeakerId;
+      return involveTarget && involveUser;
+    })
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(-limit);
+
+  return related
+    .map((entry) => ({
+      role: entry.speakerId === input.targetTreeId ? 'assistant' as const : 'user' as const,
+      content: sanitizeLlmLine(entry.message),
+    }))
+    .filter((entry) => entry.content.length > 0);
+};
+
+export const buildTreePersonaSystemMessage = (input: {
+  tree: Pick<TreeAgent, 'id' | 'name' | 'personality' | 'isManual' | 'tag' | 'shape'>;
+  forestSeason: string;
+  forestTime: string;
+  softMemorySnippets: string[];
+  historyMessages: TreeRuntimeHistoryMessage[];
+}): string => {
+  const flavor = generateTreePersonaRuntime(input.tree);
+  const slangRules = getSlangGlobalRules();
+  const slangTags = getSlangTagsForPersonality(input.tree.personality);
+  const styleExamples = getSlangTemplatesForPersonality(input.tree.personality).slice(0, 2);
+  const personaLabel = getPersonaLabel(input.tree.personality);
+  const memeBackground = getTreeIdentityGagBackground({
+    personality: input.tree.personality,
+    shapeId: input.tree.shape?.id,
+    isManual: input.tree.isManual,
+    maxItems: 3,
+  });
+
+  const tagPool = [
+    input.tree.personality,
+    input.tree.tag,
+    personaLabel,
+    ...slangTags,
+    `语气:${flavor.tone}`,
+    `口头禅:${flavor.catchphrase}`,
+  ].filter(Boolean);
+
+  const memorySection = input.softMemorySnippets.length
+    ? input.softMemorySnippets.map((entry, index) => `${index + 1}. ${entry}`).join('\n')
+    : '暂无软记忆片段';
+
+  const backgroundSection = memeBackground.length
+    ? memeBackground.map((entry, index) => `${index + 1}. ${entry}`).join('\n')
+    : '1. 平静生长，保持树木语感。';
+
+  const historySection = input.historyMessages.length
+    ? input.historyMessages
+      .map((entry, index) => `${index + 1}. ${entry.role === 'assistant' ? '树' : '用户'}: ${entry.content}`)
+      .join('\n')
+    : '暂无历史对话';
+
+  const styleSection = styleExamples.length
+    ? styleExamples.map((entry, index) => `Example ${index + 1}: ${entry}`).join('\n')
+    : 'Example 1: 今天风很懂我，先光合再发疯。🌿';
+
+  return [
+    '你在森林世界中扮演一棵拟人树木，只能以“树木第一人称”回复。',
+    `树名: ${input.tree.name}`,
+    `人格标签: ${tagPool.join(' / ')}`,
+    `森林时间: ${input.forestSeason} ${input.forestTime}`,
+    `全局风格: ${slangRules.style}`,
+    `Emoji 频率: ${slangRules.emoji_frequency}`,
+    '以下是该树的热梗背景，请自然吸收后再回答:',
+    backgroundSection,
+    '以下是最近对话（最多 5 条），回复时要保持上下文连续:',
+    historySection,
+    '以下是软记忆片段，可自然引用但不要硬背诵:',
+    memorySection,
+    '模仿该人格语感，但禁止逐字复读模板:',
+    styleSection,
+    '回复要求: 1-2 句完整中文，语义连贯，不输出 undefined/null，不要截断半句。',
+  ].join('\n');
 };

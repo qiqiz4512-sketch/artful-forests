@@ -1,9 +1,27 @@
-export type TreePersonality = '温柔' | '睿智' | '顽皮' | '社恐' | '神启';
+export type TreePersonality = '温柔' | '睿智' | '顽皮' | '活泼' | '社恐' | '神启';
 
 export enum SocialState {
   IDLE = 'IDLE',
   TALKING = 'TALKING',
   SLEEPING = 'SLEEPING',
+}
+
+export type DrawingBrushType = 'watercolor' | 'crayon' | 'pen';
+
+export interface DrawingStroke {
+  startPoint: { x: number; y: number };
+  points: { x: number; y: number }[];
+  color: string;
+  brush: DrawingBrushType;
+  timestamp: number;
+  duration: number;
+}
+
+export interface DrawingData {
+  timestamp: number;
+  strokes: DrawingStroke[];
+  width: number;
+  height: number;
 }
 
 export interface SocialCircle {
@@ -29,6 +47,7 @@ export interface TreeMemory {
 export interface TreeAgent {
   id: string;
   name: string;
+  tag?: string; // 社会标签/称号，如 "脆皮大学生"、"i树人" 等
   position: {
     x: number;
     y: number;
@@ -43,6 +62,7 @@ export interface TreeAgent {
   socialCircle: SocialCircle;
   intimacyMap: Record<string, number>;
   growthBoost: number;
+  growthScore: number;
   neighbors: string[];
   isManual: boolean;
   memory: TreeMemory;
@@ -51,6 +71,8 @@ export interface TreeAgent {
     lastWords: string;
     chatterbox?: boolean;
     speakingPace?: SpeakingPace;
+    drawingData?: DrawingData; // 绘画过程轨迹
+    drawingImageData?: string; // 绘画完成后的图像 dataURL
   };
   shape?: {
     id: string;
@@ -74,12 +96,15 @@ export interface AddTreeInput {
   scale: number;
   zIndex: number;
   name: string;
+  tag?: string;
   personality: string;
   metadata: {
     bio: string;
     lastWords: string;
     chatterbox?: boolean;
     speakingPace?: SpeakingPace;
+    drawingData?: DrawingData;
+    drawingImageData?: string;
   };
   energy?: number;
   generation?: number;
@@ -105,9 +130,24 @@ export interface ChatHistoryEntry {
   message: string;
   createdAt: number;
   type?: 'chat' | 'epic' | 'system';
+  source?: 'auto' | 'user' | 'llm';
+  conversationMode?: 'group' | 'direct';
   likes?: number;
   comments?: number;
   isTrending?: boolean;
+}
+
+export type SceneInteractionKind = 'energy' | 'prune' | 'memory';
+export type SceneInteractionPhase = 'hover' | 'trigger';
+
+export interface SceneInteractionEvent {
+  token: number;
+  kind: SceneInteractionKind;
+  phase: SceneInteractionPhase;
+  targetTreeId: string;
+  relatedTreeIds: string[];
+  createdAt: number;
+  source: 'chat-composer';
 }
 
 export type SocialWeather = 'sunny' | 'rain' | 'snow' | 'night';

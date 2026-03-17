@@ -107,12 +107,18 @@ VITE_SECONDME_OAUTH_QUERY_PROVIDER=
 
 Run the SQL in `supabase/auth_setup.sql` inside your Supabase SQL Editor.
 
+If you want tree data, chat highlights, and tree biography pages to persist across devices via SecondMe identity, also run:
+
+```bash
+supabase/tree_profiles_setup.sql
+```
+
 ### Notes
 
 - SecondMe SSO button appears only when `VITE_SECONDME_SSO_ENABLED=true`.
 - Login call priority: `VITE_SECONDME_SSO_PROVIDER_ID` -> `VITE_SECONDME_OAUTH_PROVIDER`.
 - If neither is set, login is blocked with a config error prompt.
-- SSO completion relies on `supabase.auth.onAuthStateChange`; successful login syncs SecondMe identity through `secondme_upsert_identity`.
+- The current runtime stores the SecondMe session locally, then uses Supabase Edge Functions for token exchange and tree-profile persistence.
 
 ### 3) Configure SecondMe in Supabase
 
@@ -134,10 +140,15 @@ After this is configured, users can click "使用 SecondMe 单点登录" in the 
 ## SecondMe 数据桥接
 
 - 桥接建表 SQL：`supabase/secondme_bridge_setup.sql`
+- 树资料持久化 SQL：`supabase/tree_profiles_setup.sql`
 - 信息表规划文档：`doc/secondme-桥接信息表规划.md`
+- Edge Functions：`secondme-oauth-exchange`、`secondme-tree-profiles`
 - 最小可用 RPC：`secondme_upsert_identity`、`secondme_enqueue_outbox`、`secondme_ingest_inbox`、`secondme_mark_inbox_processed`
 
 建议执行顺序：
 
 1. 先执行 `supabase/auth_setup.sql`
-2. 再执行 `supabase/secondme_bridge_setup.sql`
+2. 再执行 `supabase/tree_profiles_setup.sql`
+3. 如果需要桥接层，再执行 `supabase/secondme_bridge_setup.sql`
+4. 部署 `secondme-oauth-exchange`
+5. 部署 `secondme-tree-profiles`

@@ -9,6 +9,7 @@ interface ImportMetaEnv {
 	readonly VITE_SECONDME_RESPONSE_TYPE?: string;
 	readonly VITE_SECONDME_SCOPE?: string;
 	readonly VITE_SECONDME_CLIENT_ID?: string;
+	readonly VITE_SECONDME_API_BASE_URL?: string;
 }
 
 interface ImportMeta {

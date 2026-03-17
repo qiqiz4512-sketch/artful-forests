@@ -11,8 +11,9 @@ export default defineConfig(({ mode }) => {
   const secondMeApiBaseUrl = (env.SECONDME_API_BASE_URL?.trim() || "https://api.mindverse.com/gate/lab").replace(/\/$/, "");
 
   return {
+    appType: "spa",
     server: {
-      host: "::",
+      host: "0.0.0.0",
       port: 8080,
       hmr: {
         overlay: false,
@@ -20,6 +21,29 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       react(),
+      {
+        name: "spa-fallback",
+        configureServer(server) {
+          // Middleware must be added as a post-processing step to avoid interfering with Vite's asset resolution
+          return () => {
+            server.middlewares.use((req, res, next) => {
+              const url = req.url.split("?")[0];
+              
+              // Explicitly allow static assets, API routes, and Vite internal requests
+              if (/\.(js|jsx|ts|tsx|css|json|woff2?|eot|ttf|otf|svg|png|jpg|gif|ico|webp)$/i.test(url) ||
+                  url.startsWith("/api") ||
+                  url.startsWith("/@") ||
+                  url === "/index.html") {
+                return next();
+              }
+              
+              // For all other navigation routes, serve index.html
+              req.url = "/index.html";
+              next();
+            });
+          };
+        },
+      },
       {
         name: "secondme-dev-exchange",
         configureServer(server) {

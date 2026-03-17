@@ -7,6 +7,7 @@ export interface SecondMeUserProfile {
   email: string | null;
   avatar: string | null;
   route: string | null;
+  tags?: string[]; // SecondMe 用户标签，用于推断树的人格初值
 }
 
 export interface SecondMeSession {

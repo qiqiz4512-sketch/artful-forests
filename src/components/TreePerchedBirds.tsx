@@ -1,3 +1,7 @@
+import { useEffect, useMemo, useState } from 'react';
+import { motion } from 'framer-motion';
+import type { SceneInteractionEvent } from '@/types/forest';
+
 type SeasonType = 'spring' | 'summer' | 'autumn' | 'winter';
 type BirdStyle = 'blue' | 'pink' | 'yellow' | 'green';
 
@@ -11,16 +15,20 @@ interface SceneTree {
 interface Props {
   season: SeasonType;
   trees: SceneTree[];
+  interactionEvent?: SceneInteractionEvent | null;
 }
 
 interface BirdSpot {
   key: string;
+  treeId: string;
   x: number;
   y: number;
   scale: number;
   facing: 'left' | 'right';
   delay: number;
   style: BirdStyle;
+  scatterX: number;
+  scatterY: number;
 }
 
 function hashString(input: string): number {
@@ -32,43 +40,85 @@ function hashString(input: string): number {
   return h >>> 0;
 }
 
-export default function TreePerchedBirds({ season, trees }: Props) {
+export default function TreePerchedBirds({ season, trees, interactionEvent = null }: Props) {
+  const [scatterToken, setScatterToken] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!interactionEvent || interactionEvent.phase !== 'trigger') return;
+    setScatterToken(interactionEvent.token);
+    const timer = window.setTimeout(() => setScatterToken((current) => (current === interactionEvent.token ? null : current)), 1700);
+    return () => window.clearTimeout(timer);
+  }, [interactionEvent]);
+
   if (season !== 'spring' && season !== 'summer') return null;
 
-  const spots: BirdSpot[] = [];
-  for (const tree of trees) {
-    const hash = hashString(tree.id);
-    const chance = (hash % 1000) / 1000;
-    if (chance > 0.02) continue;
+  const visibleSpots = useMemo(() => {
+    const spots: BirdSpot[] = [];
+    for (const tree of trees) {
+      const hash = hashString(tree.id);
+      const chance = (hash % 1000) / 1000;
+      if (chance > 0.02) continue;
 
-    const side = ((hash >> 3) % 2) === 0 ? -1 : 1;
-    const topLift = 0.18 + (((hash >> 5) % 12) / 100);
-    const xOffsetRatio = 0.08 + (((hash >> 7) % 16) / 100);
-    const scale = 0.72 + (((hash >> 9) % 20) / 100);
-    const styleRoll = (hash >> 13) % 2;
-    const style: BirdStyle = season === 'spring'
-      ? styleRoll === 0 ? 'pink' : 'yellow'
-      : styleRoll === 0 ? 'blue' : 'green';
+      const side = ((hash >> 3) % 2) === 0 ? -1 : 1;
+      const topLift = 0.18 + (((hash >> 5) % 12) / 100);
+      const xOffsetRatio = 0.08 + (((hash >> 7) % 16) / 100);
+      const scale = 0.72 + (((hash >> 9) % 20) / 100);
+      const styleRoll = (hash >> 13) % 2;
+      const style: BirdStyle = season === 'spring'
+        ? styleRoll === 0 ? 'pink' : 'yellow'
+        : styleRoll === 0 ? 'blue' : 'green';
 
-    spots.push({
-      key: `perch-${tree.id}`,
-      x: tree.x + tree.size * (0.5 + side * xOffsetRatio),
-      y: tree.y + tree.size * topLift,
-      scale,
-      facing: side < 0 ? 'left' : 'right',
-      delay: ((hash >> 11) % 1600) / 1000,
-      style,
-    });
-  }
+      spots.push({
+        key: `perch-${tree.id}`,
+        treeId: tree.id,
+        x: tree.x + tree.size * (0.5 + side * xOffsetRatio),
+        y: tree.y + tree.size * topLift,
+        scale,
+        facing: side < 0 ? 'left' : 'right',
+        delay: ((hash >> 11) % 1600) / 1000,
+        style,
+        scatterX: side * (22 + ((hash >> 15) % 36)),
+        scatterY: -30 - ((hash >> 17) % 24),
+      });
+    }
 
-  const visibleSpots = spots.slice(0, 16);
+    return spots.slice(0, 16);
+  }, [season, trees]);
+
+  const targetTree = interactionEvent ? trees.find((tree) => tree.id === interactionEvent.targetTreeId) : null;
 
   return (
     <div className="tree-perched-birds" aria-hidden="true">
-      {visibleSpots.map((spot) => (
-        <span
+      {visibleSpots.map((spot) => {
+        const isTriggered = Boolean(scatterToken && interactionEvent?.phase === 'trigger' && targetTree);
+        const distance = targetTree
+          ? Math.hypot((spot.x - targetTree.x), (spot.y - targetTree.y))
+          : Number.POSITIVE_INFINITY;
+        const shouldScatter = isTriggered && distance < 220;
+
+        return (
+        <motion.span
           key={spot.key}
           className="tree-perched-bird"
+          initial={false}
+          animate={shouldScatter
+            ? {
+                x: [0, spot.scatterX * 0.35, spot.scatterX],
+                y: [0, spot.scatterY * 0.45, spot.scatterY],
+                scale: [spot.scale, spot.scale * 1.08, spot.scale * 0.94],
+                rotate: [0, spot.facing === 'left' ? -14 : 14, spot.facing === 'left' ? -20 : 20],
+                opacity: [1, 1, 0],
+              }
+            : {
+                x: 0,
+                y: [0, -1.5, 0],
+                scale: spot.scale,
+                rotate: [0, spot.facing === 'left' ? -1.5 : 1.5, 0],
+                opacity: 1,
+              }}
+          transition={shouldScatter
+            ? { duration: 1.35, ease: 'easeOut' }
+            : { duration: 2.8, repeat: Infinity, ease: 'easeInOut', delay: spot.delay }}
           style={{
             left: `${spot.x}px`,
             top: `${spot.y}px`,
@@ -77,8 +127,8 @@ export default function TreePerchedBirds({ season, trees }: Props) {
           }}
         >
           <PerchedBirdSvg styleType={spot.style} />
-        </span>
-      ))}
+        </motion.span>
+      );})}
     </div>
   );
 }

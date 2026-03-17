@@ -4,3 +4,6 @@
 
 [functions.secondme-oauth-exchange]
 verify_jwt = false
+
+[functions.secondme-tree-profiles]
+verify_jwt = false

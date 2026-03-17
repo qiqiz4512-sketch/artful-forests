@@ -1,10 +1,16 @@
-import { createLovableConfig } from "lovable-agent-playwright-config/config";
+import { defineConfig } from '@playwright/test';
 
-export default createLovableConfig({
-  // Add your custom playwright configuration overrides here
-  // Example:
-  // timeout: 60000,
-  // use: {
-  //   baseURL: 'http://localhost:3000',
-  // },
+const channel = process.env.PLAYWRIGHT_CHANNEL?.trim() || undefined;
+
+export default defineConfig({
+  testDir: './tests',
+  timeout: 30_000,
+  fullyParallel: false,
+  reporter: 'list',
+  use: {
+    channel,
+    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
+    video: 'off',
+  },
 });

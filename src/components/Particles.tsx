@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { ThemeColors } from '@/hooks/useTimeTheme';
 import { WorldEcologyAtmosphere } from '@/lib/worldEcology';
+import type { SceneInteractionEvent } from '@/types/forest';
 
 export type WeatherType = 'sunny' | 'rain' | 'snow';
 export type SeasonType = 'spring' | 'summer' | 'autumn' | 'winter';
@@ -22,19 +23,39 @@ interface Particle {
   leafColor?: string;
 }
 
+interface InteractionBurstParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  opacity: number;
+  life: number;
+  maxLife: number;
+  color: string;
+  stretchX?: number;
+  stretchY?: number;
+  rotation?: number;
+}
+
 interface Props {
   colors: ThemeColors;
   weather: WeatherType;
   season: SeasonType;
   emissionRateMultiplier?: number;
   atmosphere: WorldEcologyAtmosphere;
+  interactionEvent?: SceneInteractionEvent | null;
+  interactionOrigin?: { x: number; y: number } | null;
+  interactionPersonality?: string | null;
 }
 
-export default function Particles({ colors, weather, season, emissionRateMultiplier = 1, atmosphere }: Props) {
+export default function Particles({ colors, weather, season, emissionRateMultiplier = 1, atmosphere, interactionEvent = null, interactionOrigin = null, interactionPersonality = null }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const particlesRef = useRef<Particle[]>([]);
+  const interactionBurstsRef = useRef<InteractionBurstParticle[]>([]);
   const animRef = useRef<number>(0);
   const emissionMulRef = useRef(emissionRateMultiplier);
+  const lastInteractionTokenRef = useRef<number | null>(null);
   emissionMulRef.current = emissionRateMultiplier;
   const autumnSunny = season === 'autumn' && weather === 'sunny';
   const noPetalSeason = (season === 'summer' || season === 'winter') && weather === 'sunny' && colors.particleType === 'petal';
@@ -183,6 +204,27 @@ export default function Particles({ colors, weather, season, emissionRateMultipl
         ctx.globalAlpha = 1;
       });
 
+      interactionBurstsRef.current = interactionBurstsRef.current.filter((particle) => particle.life > 0);
+      interactionBurstsRef.current.forEach((particle) => {
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        particle.vy += 0.02;
+        particle.life -= 1;
+        particle.opacity = Math.max(0, particle.life / particle.maxLife);
+
+        ctx.save();
+        ctx.globalAlpha = particle.opacity * 0.92;
+        ctx.translate(particle.x, particle.y);
+        ctx.rotate(particle.rotation ?? 0);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, particle.stretchX ?? particle.size, particle.stretchY ?? particle.size, 0, 0, Math.PI * 2);
+        ctx.fillStyle = particle.color;
+        ctx.shadowColor = particle.color;
+        ctx.shadowBlur = particle.size * 3.2;
+        ctx.fill();
+        ctx.restore();
+      });
+
       // Dynamically adjust particle count without restarting animation
       const targetCount = getParticleCount(colors.particleType, weather, emissionMulRef.current, autumnSunny, noPetalSeason);
       if (particlesRef.current.length < targetCount) {
@@ -202,6 +244,64 @@ export default function Particles({ colors, weather, season, emissionRateMultipl
       window.removeEventListener('resize', onResize);
     };
   }, [atmosphere, autumnSunny, colors, noPetalSeason, season, weather]);
+
+  useEffect(() => {
+    if (!interactionEvent || !interactionOrigin) return;
+    if (lastInteractionTokenRef.current === interactionEvent.token) return;
+    lastInteractionTokenRef.current = interactionEvent.token;
+
+    const count = interactionEvent.phase === 'hover'
+      ? 9
+      : interactionEvent.kind === 'energy'
+        ? 28
+        : interactionEvent.kind === 'prune'
+          ? 18
+          : 24;
+    const color = interactionEvent.kind === 'energy'
+      ? 'rgba(255, 214, 133, 0.9)'
+      : interactionEvent.kind === 'prune'
+        ? 'rgba(167, 225, 149, 0.9)'
+        : 'rgba(215, 168, 247, 0.9)';
+
+    const nextParticles = Array.from({ length: count }, (_, index) => {
+      const angle = (Math.PI * 2 * index) / count + Math.random() * 0.22;
+      const speed = interactionEvent.phase === 'hover'
+        ? 0.8 + Math.random() * 1.1
+        : 1.6 + Math.random() * 2.4;
+      return {
+        x: interactionOrigin.x + (Math.random() - 0.5) * 10,
+        y: interactionOrigin.y + (Math.random() - 0.5) * 10,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - (interactionEvent.kind === 'energy' ? 0.5 : 0.2),
+        size: interactionEvent.phase === 'hover' ? 2 + Math.random() * 1.4 : 2.6 + Math.random() * 2.8,
+        opacity: 1,
+        life: interactionEvent.phase === 'hover' ? 18 + Math.random() * 8 : 34 + Math.random() * 14,
+        maxLife: interactionEvent.phase === 'hover' ? 24 : 42,
+        color,
+      } satisfies InteractionBurstParticle;
+    });
+
+    if (interactionPersonality === '神启') {
+      const auroraParticles = Array.from({ length: interactionEvent.phase === 'hover' ? 4 : 7 }, (_, index) => ({
+        x: interactionOrigin.x + (Math.random() - 0.5) * 28,
+        y: interactionOrigin.y - 16 - Math.random() * 22,
+        vx: (Math.random() - 0.5) * 0.45,
+        vy: -0.3 - Math.random() * 0.35,
+        size: 5 + Math.random() * 4,
+        opacity: 1,
+        life: interactionEvent.phase === 'hover' ? 22 + Math.random() * 8 : 34 + Math.random() * 10,
+        maxLife: interactionEvent.phase === 'hover' ? 28 : 40,
+        color: index % 2 === 0 ? 'rgba(146, 241, 221, 0.82)' : 'rgba(194, 152, 255, 0.8)',
+        stretchX: 3 + Math.random() * 2,
+        stretchY: 14 + Math.random() * 10,
+        rotation: (-0.35 + Math.random() * 0.7),
+      } satisfies InteractionBurstParticle));
+
+      nextParticles.push(...auroraParticles);
+    }
+
+    interactionBurstsRef.current.push(...nextParticles);
+  }, [interactionEvent, interactionOrigin, interactionPersonality]);
 
   return (
     <canvas

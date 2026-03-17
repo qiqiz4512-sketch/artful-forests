@@ -431,6 +431,29 @@
     animation: mushroom-breathe 2.1s ease-in-out infinite;
   }
 
+  /* 自动播放被拦截时的脉冲提示动画 */
+  .bgm-mushroom--blocked {
+    animation: mushroom-blocked-pulse 1.8s ease-in-out infinite;
+  }
+
+  .bgm-blocked-badge {
+    position: absolute;
+    bottom: -20px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    font-weight: 600;
+    color: rgba(74, 109, 74, 0.92);
+    background: rgba(240, 252, 238, 0.88);
+    border: 1px solid rgba(138, 190, 120, 0.5);
+    border-radius: 8px;
+    padding: 2px 7px;
+    white-space: nowrap;
+    pointer-events: none;
+    animation: bgm-hint-fade 1.4s ease-in-out infinite alternate;
+    letter-spacing: 0.02em;
+  }
+
   .bgm-mushroom-cap {
     position: absolute;
     left: 11px;
@@ -507,6 +530,16 @@
     padding: 8px 10px;
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  .bgm-unlock-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 115;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: default;
   }
 
   .bgm-autoplay-hint {
@@ -619,6 +652,20 @@
     }
     50% {
       transform: scale(1.05);
+    }
+  }
+
+  @keyframes mushroom-blocked-pulse {
+    0%,
+    100% {
+      opacity: 0.45;
+      filter: drop-shadow(0 0 5px rgba(227, 157, 70, 0.12));
+      transform: scale(0.97);
+    }
+    50% {
+      opacity: 0.82;
+      filter: drop-shadow(0 0 16px rgba(255, 210, 100, 0.6));
+      transform: scale(1.04);
     }
   }
 

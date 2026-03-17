@@ -1,74 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useForestStore } from '@/stores/useForestStore';
-import { SceneTreeSnapshot, TreeAgent } from '@/types/forest';
+import { TreeAgent } from '@/types/forest';
 
 interface Props {
   agents: TreeAgent[];
-  sceneTrees?: SceneTreeSnapshot[];
   offsetX?: number;
+  visibleTreeIds?: string[];
 }
 
 const ENERGY_LINK_RANGE = 760;
 const ENERGY_MIN_LINKS = 6;
+const ENERGY_VISIBLE_MIN_LINKS = 4;
+const ENERGY_VISIBLE_MAX_LINKS = 6;
 const DIVINE_VISUAL_FALLBACK_MS = 10_000;
+const PASSIVE_DIVINE_LINK_RANGE = 520;
 
-function ChatBubble({ x, y, message }: { x: number; y: number; message: string }) {
-  const isPlaceholder = message.trim() === '......';
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8, scale: 0.92 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: -6, scale: 0.9 }}
-      className="absolute pointer-events-none text-xs"
-      style={{
-        left: x,
-        top: y,
-        transform: 'translate(0, -100%)',
-        padding: isPlaceholder ? '5px 12px' : '7px 12px',
-        borderRadius: '18px',
-        border: '1px solid rgba(186, 206, 194, 0.52)',
-        background: 'rgba(252, 255, 253, 0.6)',
-        color: 'hsl(157, 35%, 24%)',
-        boxShadow: '0 8px 18px rgba(86, 112, 98, 0.16), 0 1px 0 rgba(255,255,255,0.56) inset',
-        backdropFilter: 'blur(4px)',
-        minWidth: isPlaceholder ? 68 : 96,
-        maxWidth: isPlaceholder ? 86 : 230,
-        whiteSpace: isPlaceholder ? 'nowrap' : 'pre-wrap',
-        wordBreak: 'break-word',
-        overflowWrap: 'anywhere',
-        fontFamily: "'ZCOOL KuaiLe', cursive",
-        letterSpacing: '0.02em',
-        lineHeight: 1.45,
-        position: 'relative',
-      }}
-    >
-      {message}
-      <div
-        style={{
-          position: 'absolute',
-          left: -6,
-          top: '74%',
-          transform: 'translateY(-50%) rotate(45deg)',
-          width: 12,
-          height: 12,
-          background: 'rgba(252, 255, 253, 0.6)',
-          borderLeft: '1px solid rgba(186, 206, 194, 0.52)',
-          borderBottom: '1px solid rgba(186, 206, 194, 0.52)',
-        }}
-      />
-    </motion.div>
-  );
-}
-
-export default function AgentLink({ agents, sceneTrees = [], offsetX = 0 }: Props) {
+export default function AgentLink({ agents, offsetX = 0, visibleTreeIds = [] }: Props) {
   const activeChat = useForestStore((state) => state.activeChat);
   const silenceUntil = useForestStore((state) => state.globalEffects.silenceUntil);
   const divineSurgeUntil = useForestStore((state) => state.globalEffects.divineSurgeUntil);
+  const sceneInteractionEvent = useForestStore((state) => state.sceneInteractionEvent);
   const [ghostChat, setGhostChat] = useState(activeChat);
   const [isFadingBySilence, setIsFadingBySilence] = useState(false);
   const [, setDivineTick] = useState(0);
+  const [, setInteractionTick] = useState(0);
   const fadeTimerRef = useRef<number | null>(null);
   const now = Date.now();
   const isSilent = now < silenceUntil;
@@ -79,7 +35,19 @@ export default function AgentLink({ agents, sceneTrees = [], offsetX = 0 }: Prop
   const manualTreeCreatedAt = manualTree?.isManual ? Number.parseInt(manualTree.id, 10) : NaN;
   const manualTreeFallbackActive =
     Number.isFinite(manualTreeCreatedAt) && (now - manualTreeCreatedAt) < DIVINE_VISUAL_FALLBACK_MS;
-  const divineVisualActive = divineSurgeActive || manualTreeFallbackActive;
+  const visibleTreeIdSet = new Set(visibleTreeIds);
+  const visibleLinkTargets = visibleTreeIdSet.size > 0
+    ? agents.filter((agent) => visibleTreeIdSet.has(agent.id))
+    : agents;
+  const passiveDivineClusterActive = Boolean(
+    manualTree && visibleLinkTargets.some((agent) => {
+      if (agent.id === manualTree.id || agent.isManual || agent.personality === '神启') return false;
+      const dx = agent.position.x - manualTree.position.x;
+      const dy = agent.position.y - manualTree.position.y;
+      return Math.hypot(dx, dy) <= PASSIVE_DIVINE_LINK_RANGE;
+    }),
+  );
+  const divineVisualActive = divineSurgeActive || manualTreeFallbackActive || passiveDivineClusterActive;
 
   useEffect(() => {
     if (activeChat) {
@@ -109,6 +77,19 @@ export default function AgentLink({ agents, sceneTrees = [], offsetX = 0 }: Prop
     };
   }, []);
 
+  useEffect(() => {
+    if (!sceneInteractionEvent || sceneInteractionEvent.phase !== 'trigger' || sceneInteractionEvent.kind !== 'memory') {
+      return;
+    }
+
+    const expireAt = sceneInteractionEvent.createdAt + 2600;
+    const timer = window.setTimeout(() => {
+      setInteractionTick((value) => value + 1);
+    }, Math.max(0, expireAt - Date.now()));
+
+    return () => window.clearTimeout(timer);
+  }, [sceneInteractionEvent]);
+
   // Force one rerender exactly when surge window ends, so visuals disappear on time.
   useEffect(() => {
     const fallbackExpireAt = Number.isFinite(manualTreeCreatedAt)
@@ -123,27 +104,52 @@ export default function AgentLink({ agents, sceneTrees = [], offsetX = 0 }: Prop
   }, [divineSurgeUntil, manualTreeCreatedAt]);
 
   const devotionLinks = manualTree && divineVisualActive
-    ? agents
-        .filter((agent) => agent.id !== manualTree.id)
-        .map((agent) => {
-          const dx = agent.position.x - manualTree.position.x;
-          const dy = agent.position.y - manualTree.position.y;
-          return {
-            agent,
-            distance: Math.hypot(dx, dy),
-          };
-        })
-        .sort((a, b) => a.distance - b.distance)
-        .filter((entry, index) => entry.distance <= ENERGY_LINK_RANGE || index < ENERGY_MIN_LINKS)
-        .slice(0, 8)
+    ? (() => {
+        const rankedTargets = visibleLinkTargets
+          .filter((agent) => agent.id !== manualTree.id)
+          .map((agent) => {
+            const dx = agent.position.x - manualTree.position.x;
+            const dy = agent.position.y - manualTree.position.y;
+            return {
+              agent,
+              distance: Math.hypot(dx, dy),
+            };
+          })
+          .sort((a, b) => a.distance - b.distance);
+
+        if (visibleTreeIdSet.size > 0) {
+          const visibleLinkCount = Math.min(
+            ENERGY_VISIBLE_MAX_LINKS,
+            Math.max(ENERGY_VISIBLE_MIN_LINKS, rankedTargets.length),
+          );
+          return rankedTargets.slice(0, visibleLinkCount);
+        }
+
+        return rankedTargets
+          .filter((entry, index) => entry.distance <= ENERGY_LINK_RANGE || index < ENERGY_MIN_LINKS)
+          .slice(0, 8);
+      })()
+    : [];
+  const memoryLinks = sceneInteractionEvent
+    && sceneInteractionEvent.phase === 'trigger'
+    && sceneInteractionEvent.kind === 'memory'
+    && (Date.now() - sceneInteractionEvent.createdAt) < 2600
+    ? (() => {
+        const source = agents.find((agent) => agent.id === sceneInteractionEvent.targetTreeId);
+        if (!source) return [];
+
+        return sceneInteractionEvent.relatedTreeIds
+          .map((id) => agents.find((agent) => agent.id === id))
+          .filter((agent): agent is TreeAgent => Boolean(agent))
+          .map((agent) => ({ source, agent }));
+      })()
     : [];
 
-  if (!activeChat && !ghostChat && devotionLinks.length === 0) return null;
+  if (!activeChat && !ghostChat && devotionLinks.length === 0 && memoryLinks.length === 0) return null;
 
   const chatToRender = activeChat ?? ghostChat;
   const chatA = chatToRender ? agents.find((agent) => agent.id === chatToRender.treeAId) : null;
   const chatB = chatToRender ? agents.find((agent) => agent.id === chatToRender.treeBId) : null;
-  const treeA = chatToRender ? sceneTrees.find((tree) => tree.id === chatToRender.treeAId) : null;
 
   const hasRenderableChat = Boolean(chatToRender && chatA && chatB);
   const a = chatA;
@@ -153,8 +159,6 @@ export default function AgentLink({ agents, sceneTrees = [], offsetX = 0 }: Prop
   const ay = a ? a.position.y : 0;
   const bx = b ? b.position.x + offsetX : 0;
   const by = b ? b.position.y : 0;
-  const bubbleAnchorX = treeA ? treeA.x + treeA.size * 0.72 + offsetX : ax + 45;
-  const bubbleAnchorY = treeA ? treeA.y + treeA.size * 0.22 : ay - 25;
 
   const mx = (ax + bx) / 2;
   const minY = Math.min(ay, by);
@@ -183,7 +187,8 @@ export default function AgentLink({ agents, sceneTrees = [], offsetX = 0 }: Prop
           </defs>
 
           {manualTree && devotionLinks.map(({ agent, distance }, index) => {
-            const intensity = Math.max(0.35, 1 - distance / 560);
+            const intensityBase = divineSurgeActive ? 1 : passiveDivineClusterActive ? 0.72 : 0.58;
+            const intensity = Math.max(0.35, (1 - distance / 560) * intensityBase);
             const mxEnergy = (manualTree.position.x + agent.position.x) * 0.5 + (index % 2 === 0 ? 8 : -8);
             const myEnergy = Math.min(manualTree.position.y, agent.position.y) - Math.max(18, distance * 0.05);
             const energyPath = `M ${manualTree.position.x + offsetX} ${manualTree.position.y} Q ${mxEnergy + offsetX} ${myEnergy} ${agent.position.x + offsetX} ${agent.position.y}`;
@@ -237,6 +242,53 @@ export default function AgentLink({ agents, sceneTrees = [], offsetX = 0 }: Prop
             );
           })}
 
+          {memoryLinks.map(({ source, agent }, index) => {
+            const mxMemory = (source.position.x + agent.position.x) * 0.5 + (index % 2 === 0 ? -18 : 18);
+            const myMemory = Math.min(source.position.y, agent.position.y) - 36 - index * 8;
+            const memoryPath = `M ${source.position.x + offsetX} ${source.position.y} Q ${mxMemory + offsetX} ${myMemory} ${agent.position.x + offsetX} ${agent.position.y}`;
+
+            return (
+              <g key={`memory-link-${source.id}-${agent.id}`}>
+                <motion.path
+                  d={memoryPath}
+                  fill="none"
+                  stroke="rgba(219, 178, 255, 0.82)"
+                  strokeWidth={2.4}
+                  strokeLinecap="round"
+                  animate={{ opacity: [0.18, 0.72, 0.18] }}
+                  transition={{ duration: 1.45 + index * 0.12, repeat: Infinity, ease: 'easeInOut' }}
+                  style={{ filter: 'drop-shadow(0 0 10px rgba(196, 143, 250, 0.58))' }}
+                />
+                <motion.path
+                  d={memoryPath}
+                  fill="none"
+                  stroke="rgba(245, 235, 255, 0.95)"
+                  strokeWidth={1.3}
+                  strokeLinecap="round"
+                  strokeDasharray="4 5"
+                  animate={{ strokeDashoffset: [0, -18], opacity: [0.22, 0.96, 0.22] }}
+                  transition={{ duration: 1.2 + index * 0.08, repeat: Infinity, ease: 'linear' }}
+                />
+                <motion.circle
+                  cx={source.position.x + offsetX}
+                  cy={source.position.y}
+                  r={2.3}
+                  fill="rgba(240, 222, 255, 0.96)"
+                  animate={{ r: [1.8, 3.4, 1.8], opacity: [0.42, 1, 0.42] }}
+                  transition={{ duration: 1.12 + index * 0.05, repeat: Infinity, ease: 'easeInOut' }}
+                />
+                <motion.circle
+                  cx={agent.position.x + offsetX}
+                  cy={agent.position.y}
+                  r={2.1}
+                  fill="rgba(211, 169, 255, 0.96)"
+                  animate={{ r: [1.6, 3.2, 1.6], opacity: [0.32, 0.9, 0.32] }}
+                  transition={{ duration: 1.22 + index * 0.05, repeat: Infinity, ease: 'easeInOut' }}
+                />
+              </g>
+            );
+          })}
+
           {hasRenderableChat && (!isSilent || isFadingBySilence) && (
             <motion.path
               d={path}
@@ -257,17 +309,6 @@ export default function AgentLink({ agents, sceneTrees = [], offsetX = 0 }: Prop
             />
           )}
         </svg>
-
-        {hasRenderableChat && (!isSilent || isFadingBySilence) && chatToRender && (
-          <>
-            <motion.div
-              animate={{ opacity: isFadingBySilence ? 0 : 1, y: isFadingBySilence ? -5 : 0 }}
-              transition={{ duration: 0.28, ease: 'easeOut' }}
-            >
-              <ChatBubble x={bubbleAnchorX} y={bubbleAnchorY} message={chatToRender.message} />
-            </motion.div>
-          </>
-        )}
       </motion.div>
     </AnimatePresence>
   );

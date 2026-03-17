@@ -1,7 +1,8 @@
 import { create } from 'zustand';
-import { ActiveChat, AddTreeInput, ChatHistoryEntry, GlobalSocialEffects, NarrativeMode, SceneTreeSnapshot, SocialState, SocialWeather, SpeakingPace, TreeAgent } from '@/types/forest';
+import { ActiveChat, AddTreeInput, ChatHistoryEntry, GlobalSocialEffects, NarrativeMode, SceneInteractionEvent, SceneInteractionKind, SceneInteractionPhase, SceneTreeSnapshot, SocialState, SocialWeather, SpeakingPace, TreeAgent } from '@/types/forest';
 import { generateRandomProfile } from '@/lib/agentProfile';
 import { getWorldEcologySocialMood, inferWorldWidthFromPositions } from '@/lib/worldEcology';
+import { scoreFromDialogue } from '@/lib/treeGrowth';
 
 const CHAT_HISTORY_LIMIT = 120;
 const DEFAULT_WORLD_WIDTH = 5000;
@@ -11,8 +12,10 @@ const NORMAL_RATIO = 0.45;
 interface ForestStoreState {
   agents: TreeAgent[];
   activeChat: ActiveChat | null;
+  activeDialogueAgentId: string | null;
   chatHistory: ChatHistoryEntry[];
   globalEffects: GlobalSocialEffects;
+  sceneInteractionEvent: SceneInteractionEvent | null;
   addTree: (tree: AddTreeInput) => void;
   changeIntimacy: (aId: string, bId: string, delta: number) => void;
   setGrowthBoostFor: (id: string, boost: number) => void;
@@ -23,11 +26,17 @@ interface ForestStoreState {
   setSocialStateFor: (ids: string[], state: SocialState) => void;
   setLastWordsFor: (ids: string[], lastWords: string) => void;
   setActiveChat: (chat: ActiveChat | null) => void;
-  addChatHistoryEntry: (entry: Omit<ChatHistoryEntry, 'id' | 'createdAt'> & Partial<Pick<ChatHistoryEntry, 'type'>>) => void;
+  setActiveDialogueAgent: (agentId: string | null) => void;
+  addChatHistoryEntry: (
+    entry: Omit<ChatHistoryEntry, 'id' | 'createdAt'>
+      & Partial<Pick<ChatHistoryEntry, 'type' | 'id' | 'createdAt'>>,
+  ) => void;
+  updateChatHistoryEntryMessage: (entryId: string, message: string) => void;
   triggerGlobalSilence: (durationMs: number, message: string, sourceTreeId?: string) => void;
   triggerDivineSurge: (durationMs: number) => void;
   setConversationWeather: (weather: SocialWeather) => void;
   setNarrativeMode: (mode: NarrativeMode) => void;
+  emitSceneInteraction: (kind: SceneInteractionKind, phase: SceneInteractionPhase, targetTreeId: string) => void;
   recordDialogueMemory: (aId: string, bId: string, message: string, now?: number) => void;
   setMemoryRecallingFor: (ids: string[], durationMs: number) => void;
 }
@@ -36,6 +45,8 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 
 const ensureUnique = (items: string[]) => [...new Set(items.filter(Boolean))];
 const INTERACTION_MEMORY_LIMIT = 3;
+const QUICK_ACTION_MEMORY_MS = 2800;
+const QUICK_ACTION_RELATION_RANGE = 620;
 
 const hashToUnit = (seed: string) => {
   let hash = 2166136261;
@@ -87,15 +98,49 @@ const inferMemoryTopic = (message: string): string => {
   return '森林';
 };
 
+const resolveSceneInteractionRelations = (agents: TreeAgent[], targetTreeId: string) => {
+  const target = agents.find((agent) => agent.id === targetTreeId);
+  if (!target) return [];
+
+  const relationIds = ensureUnique([
+    target.socialCircle.partner ?? '',
+    ...target.socialCircle.friends,
+    ...target.socialCircle.family,
+  ]);
+
+  return relationIds
+    .map((id) => {
+      const agent = agents.find((entry) => entry.id === id);
+      if (!agent) return null;
+      const dx = agent.position.x - target.position.x;
+      const dy = agent.position.y - target.position.y;
+      return {
+        id,
+        distance: Math.hypot(dx, dy),
+        intimacy: Math.max(target.intimacyMap[id] ?? 0, agent.intimacyMap[target.id] ?? 0),
+      };
+    })
+    .filter((entry): entry is { id: string; distance: number; intimacy: number } => Boolean(entry))
+    .filter((entry) => entry.distance <= QUICK_ACTION_RELATION_RANGE)
+    .sort((a, b) => {
+      if (b.intimacy !== a.intimacy) return b.intimacy - a.intimacy;
+      return a.distance - b.distance;
+    })
+    .slice(0, 3)
+    .map((entry) => entry.id);
+};
+
 const createHistoryEntry = (
-  input: Omit<ChatHistoryEntry, 'id' | 'createdAt'> & Partial<Pick<ChatHistoryEntry, 'type'>>,
+  input: Omit<ChatHistoryEntry, 'id' | 'createdAt'> & Partial<Pick<ChatHistoryEntry, 'type' | 'id' | 'createdAt'>>,
 ): ChatHistoryEntry => ({
-  id: `${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+  id: input.id ?? `${Date.now()}-${Math.floor(Math.random() * 100000)}`,
   speakerId: input.speakerId,
   listenerId: input.listenerId,
   message: input.message,
-  createdAt: Date.now(),
+  createdAt: input.createdAt ?? Date.now(),
   type: input.type ?? 'chat',
+  source: input.source ?? 'auto',
+  conversationMode: input.conversationMode,
   likes: input.likes,
   comments: input.comments,
   isTrending: input.isTrending,
@@ -107,6 +152,18 @@ const isSameDialogueEntry = (a: ChatHistoryEntry, b: ChatHistoryEntry): boolean 
   && a.message === b.message
   && Math.abs(a.createdAt - b.createdAt) <= 2500
 );
+
+const applyGrowthScore = (agents: TreeAgent[], speakerId: string, listenerId: string, message: string): TreeAgent[] => {
+  const delta = scoreFromDialogue(message);
+  if (delta <= 0) return agents;
+  return agents.map((agent) => {
+    if (agent.id !== speakerId && agent.id !== listenerId) return agent;
+    return {
+      ...agent,
+      growthScore: Math.max(0, agent.growthScore + delta),
+    };
+  });
+};
 
 const withNeighbors = (agents: TreeAgent[], radius = 200): TreeAgent[] => {
   const worldWidth = inferWorldWidthFromPositions(agents.map((agent) => agent.position.x));
@@ -140,7 +197,9 @@ const withNeighbors = (agents: TreeAgent[], radius = 200): TreeAgent[] => {
 export const useForestStore = create<ForestStoreState>((set, get) => ({
   agents: [],
   activeChat: null,
+  activeDialogueAgentId: null,
   chatHistory: [],
+  sceneInteractionEvent: null,
   globalEffects: {
     silenceUntil: 0,
     conversationWeather: 'sunny',
@@ -151,6 +210,7 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
     const nextAgent: TreeAgent = {
       id: tree.id,
       name: tree.name,
+      tag: tree.tag,
       position: tree.position,
       scale: tree.scale,
       zIndex: tree.zIndex,
@@ -166,6 +226,7 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
       },
       intimacyMap: tree.intimacyMap ?? {},
       growthBoost: tree.growthBoost ?? 1,
+      growthScore: 0,
       neighbors: [],
       isManual: Boolean(tree.isManual),
       memory: {
@@ -263,6 +324,7 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
         listenerId: epicTargetId,
         message: '【森林史诗】神启之树与新的灵魂完成了命运连结。',
         type: 'epic',
+        source: 'auto',
       });
     }
   },
@@ -383,6 +445,7 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
         socialCircle: prev?.socialCircle ?? { friends: [], family: [], partner: null },
         intimacyMap: prev?.intimacyMap ?? {},
         growthBoost: prev?.growthBoost ?? 1,
+        growthScore: prev?.growthScore ?? 0,
         neighbors: prev?.neighbors ?? [],
         isManual: prev?.isManual ?? false,
         memory: prev?.memory ?? createInitialMemory(),
@@ -443,17 +506,10 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
       return;
     }
 
-    const entry = createHistoryEntry({
-      speakerId: chat.treeAId,
-      listenerId: chat.treeBId,
-      message: chat.message,
-      type: 'chat',
-    });
-
-    set((state) => ({
-      activeChat: chat,
-      chatHistory: [...state.chatHistory, entry].slice(-CHAT_HISTORY_LIMIT),
-    }));
+    set({ activeChat: chat });
+  },
+  setActiveDialogueAgent: (agentId) => {
+    set({ activeDialogueAgentId: agentId });
   },
   addChatHistoryEntry: (entry) => {
     const next = createHistoryEntry(entry);
@@ -473,8 +529,22 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
 
       return {
         chatHistory: [...state.chatHistory, next].slice(-CHAT_HISTORY_LIMIT),
+        agents: applyGrowthScore(state.agents, next.speakerId, next.listenerId, next.message),
       };
     });
+  },
+  updateChatHistoryEntryMessage: (entryId, message) => {
+    if (!entryId) return;
+    set((state) => ({
+      chatHistory: state.chatHistory.map((entry) =>
+        entry.id === entryId
+          ? {
+              ...entry,
+              message,
+            }
+          : entry,
+      ),
+    }));
   },
   triggerGlobalSilence: (durationMs, message, sourceTreeId) => {
     const until = Date.now() + Math.max(0, durationMs);
@@ -485,6 +555,7 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
         listenerId: sourceId,
         message,
         type: 'system',
+        source: 'auto',
       });
     }
 
@@ -527,6 +598,38 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
         ...state.globalEffects,
         narrativeMode: mode,
       },
+    }));
+  },
+  emitSceneInteraction: (kind, phase, targetTreeId) => {
+    if (!targetTreeId) return;
+    const createdAt = Date.now();
+    const relatedTreeIds = phase === 'trigger' && kind === 'memory'
+      ? resolveSceneInteractionRelations(get().agents, targetTreeId)
+      : [];
+
+    set((state) => ({
+      sceneInteractionEvent: {
+        token: createdAt,
+        kind,
+        phase,
+        targetTreeId,
+        relatedTreeIds,
+        createdAt,
+        source: 'chat-composer',
+      },
+      agents: phase === 'trigger' && kind === 'memory'
+        ? state.agents.map((agent) =>
+            agent.id === targetTreeId || relatedTreeIds.includes(agent.id)
+              ? {
+                  ...agent,
+                  memory: {
+                    ...(agent.memory ?? createInitialMemory()),
+                    recallingUntil: createdAt + QUICK_ACTION_MEMORY_MS,
+                  },
+                }
+              : agent,
+          )
+        : state.agents,
     }));
   },
   recordDialogueMemory: (aId, bId, message, now = Date.now()) => {

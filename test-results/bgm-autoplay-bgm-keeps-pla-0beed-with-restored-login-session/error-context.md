@@ -1,0 +1,200 @@
+# Page snapshot
+
+```yaml
+- generic [active]:
+  - generic:
+    - region "Notifications (F8)":
+      - list
+    - region "Notifications alt+T"
+    - generic [ref=e1]:
+      - generic:
+        - generic:
+          - generic: 森林起点
+          - generic: 这里是最初的风声
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - generic:
+            - generic:
+              - generic:
+                - img "planted tree"
+            - generic:
+              - generic: ✦
+        - generic [ref=e7]:
+          - generic [ref=e9]:
+            - img "planted tree"
+          - generic:
+            - generic: ✦
+        - generic [ref=e10]:
+          - generic:
+            - generic:
+              - generic:
+                - img "planted tree"
+            - generic:
+              - generic: ✦
+        - generic [ref=e12]:
+          - generic [ref=e14]:
+            - img "planted tree"
+          - generic:
+            - generic: ◦
+        - generic [ref=e16]:
+          - generic [ref=e18]:
+            - img "planted tree"
+          - generic:
+            - generic: ✦
+        - generic [ref=e19]:
+          - generic:
+            - generic:
+              - generic:
+                - img "planted tree"
+            - generic:
+              - generic: ◦
+        - generic [ref=e21]:
+          - generic [ref=e23]:
+            - img "planted tree"
+          - generic:
+            - generic: ♥
+        - generic [ref=e25]:
+          - generic [ref=e27]:
+            - img "planted tree"
+          - generic:
+            - generic: ✦
+        - generic [ref=e29]:
+          - generic [ref=e31]:
+            - img "planted tree"
+          - generic:
+            - generic: ◦
+        - generic [ref=e33]:
+          - generic [ref=e35]:
+            - img "planted tree"
+          - generic:
+            - generic: ♥
+        - generic [ref=e37]:
+          - generic [ref=e39]:
+            - img "planted tree"
+          - generic:
+            - generic: ✦
+        - generic [ref=e41]:
+          - generic [ref=e43]:
+            - img "planted tree"
+          - generic:
+            - generic: ✦
+        - generic [ref=e45]:
+          - generic [ref=e47]:
+            - img "planted tree"
+          - generic:
+            - generic: ♥
+        - generic [ref=e49]:
+          - generic [ref=e51]:
+            - img "planted tree"
+          - generic:
+            - generic: ✦
+        - generic [ref=e53]:
+          - generic [ref=e55]:
+            - img "planted tree"
+          - generic:
+            - generic: ♥
+        - generic [ref=e57]:
+          - generic [ref=e59]:
+            - img "planted tree"
+          - generic:
+            - generic: ♥
+        - generic [ref=e61]:
+          - generic [ref=e63]:
+            - img "planted tree"
+          - generic:
+            - generic: ♪
+        - generic [ref=e65]:
+          - generic [ref=e67]:
+            - img "planted tree"
+          - generic:
+            - generic: ✦
+        - generic [ref=e69]:
+          - generic [ref=e71]:
+            - img "planted tree"
+          - generic:
+            - generic: ♪
+        - generic [ref=e73]:
+          - generic [ref=e75]:
+            - img "planted tree"
+          - generic:
+            - generic: ♥
+        - generic [ref=e77]:
+          - generic [ref=e79]:
+            - img "planted tree"
+          - generic:
+            - generic: ♪
+        - generic [ref=e80]:
+          - generic:
+            - generic:
+              - generic:
+                - img "planted tree"
+            - generic:
+              - generic: ✦
+        - generic:
+          - img
+      - generic:
+        - generic: Ecology Zone
+        - generic: 冷杉林带
+      - generic [ref=e81]:
+        - button "🌱 春" [ref=e83]:
+          - generic [ref=e84]: 🌱
+          - generic [ref=e85]: 春
+        - button "☀️ 晴" [ref=e87]:
+          - generic [ref=e88]: ☀️
+          - generic [ref=e89]: 晴
+        - button "🌇 暮" [ref=e91]:
+          - generic [ref=e92]: 🌇
+          - generic [ref=e93]: 暮
+      - generic [ref=e95]:
+        - button "⌖" [ref=e96]:
+          - generic [ref=e97]: ⌖
+        - generic [ref=e98]:
+          - generic [ref=e99]:
+            - generic [ref=e100]: 森林絮语
+            - generic [ref=e101]: 神谕日记
+            - generic [ref=e102]:
+              - button "森林社交 (A2A)" [ref=e103]
+              - button "与树说 (U2A)" [ref=e104]
+              - button "神启 (Epic)" [ref=e105]
+          - generic [ref=e106]:
+            - generic [ref=e109]: 18:28
+            - generic [ref=e112]:
+              - button "溪语 · 佛系养生博主" [ref=e113]:
+                - generic [ref=e114]: 溪语 · 佛系养生博主
+                - img [ref=e117]
+              - button "刚才那道极光是我发的朋友圈，点赞量过亿了。🌌 稳了。像露水… 4s" [ref=e125]:
+                - paragraph [ref=e126]: 刚才那道极光是我发的朋友圈，点赞量过亿了。🌌 稳了。像露水…
+                - generic [ref=e127]: 4s
+            - generic [ref=e129]:
+              - button "青叶 · 脆皮大学生" [ref=e130]:
+                - generic [ref=e131]: 青叶 · 脆皮大学生
+                - img [ref=e134]
+              - button "在。 刚刚" [ref=e140]:
+                - paragraph [ref=e141]: 在。
+                - generic [ref=e142]: 刚刚
+          - generic [ref=e143]:
+            - generic [ref=e145]: 可点击头像 @某棵树，也可直接发言让整片森林一起回应
+            - generic [ref=e146]:
+              - textbox "不 @任何树也可以直接发言，全部树木都会回应你" [ref=e147]
+              - button "发送" [disabled] [ref=e148]
+          - generic "拖拽调整高度" [ref=e149]
+      - generic [ref=e151]:
+        - button "轻触页面进入森林并开启背景音乐" [ref=e152]
+        - status: 森林在等你轻轻唤醒
+        - button "播放森林背景音乐" [ref=e153]:
+          - img "蘑菇音乐按钮"
+      - button "图鉴 106棵（36种）" [ref=e155]
+      - generic [ref=e156]:
+        - button "关闭登录弹窗" [ref=e157]
+        - dialog "认领你的森林通行证" [ref=e159]:
+          - generic [ref=e160]: 🎐
+          - heading "认领你的森林通行证" [level=2] [ref=e161]
+          - generic [ref=e164]:
+            - button "使用 SecondMe 单点登录" [ref=e165]
+            - generic: 🐿️
+      - button "个人中心" [ref=e167]:
+        - generic [ref=e168]: 🎐
+        - generic [ref=e169]: Playwright…
+      - button "🌱" [ref=e170]:
+        - generic [ref=e171]: 🌱
+```
