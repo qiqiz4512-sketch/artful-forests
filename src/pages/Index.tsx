@@ -181,6 +181,18 @@ const saveTreeChatSessions = (sessions: TreeChatSessionMap, userId?: string | nu
   }
 };
 
+// ── Owner ID persistence (survives session expiry) ────────────────────────────
+const FOREST_LAST_OWNER_ID_KEY = 'forest.last_owner_id';
+
+const persistOwnerId = (ownerId: string | null) => {
+  if (!ownerId) return;
+  try { localStorage.setItem(FOREST_LAST_OWNER_ID_KEY, ownerId); } catch { /* quota */ }
+};
+
+const loadLastKnownOwnerId = (): string | null => {
+  try { return localStorage.getItem(FOREST_LAST_OWNER_ID_KEY); } catch { return null; }
+};
+
 // ── Manual tree persistence ──────────────────────────────────────────────────
 const FOREST_MANUAL_TREES_KEY = 'forest.manual_trees';
 const resolveManualTreesStorageKey = (userId?: string | null) =>
@@ -211,9 +223,22 @@ const loadManualTrees = (userId?: string | null): PersistedManualTreeEntry[] => 
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(resolveManualTreesStorageKey(userId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as PersistedManualTreeEntry[]) : [];
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed as PersistedManualTreeEntry[];
+    }
+    // Fallback: try last known owner ID when current session is expired
+    if (!userId) {
+      const lastOwnerId = loadLastKnownOwnerId();
+      if (lastOwnerId) {
+        const fallbackRaw = localStorage.getItem(resolveManualTreesStorageKey(lastOwnerId));
+        if (fallbackRaw) {
+          const fallbackParsed = JSON.parse(fallbackRaw);
+          if (Array.isArray(fallbackParsed)) return fallbackParsed as PersistedManualTreeEntry[];
+        }
+      }
+    }
+    return [];
   } catch {
     return [];
   }
@@ -223,6 +248,46 @@ const saveManualTrees = (entries: PersistedManualTreeEntry[], userId?: string | 
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(resolveManualTreesStorageKey(userId), JSON.stringify(entries));
+    if (userId) persistOwnerId(userId);
+  } catch {
+    // Ignore storage quota and private-mode write failures.
+  }
+};
+
+// ── Chat history persistence ─────────────────────────────────────────────────
+const FOREST_CHAT_HISTORY_KEY = 'forest.chat_history';
+const resolveChatHistoryStorageKey = (userId?: string | null) =>
+  userId ? `${FOREST_CHAT_HISTORY_KEY}:${userId}` : FOREST_CHAT_HISTORY_KEY;
+
+const loadChatHistory = (userId?: string | null): ChatHistoryEntry[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(resolveChatHistoryStorageKey(userId));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed as ChatHistoryEntry[];
+    }
+    if (!userId) {
+      const lastOwnerId = loadLastKnownOwnerId();
+      if (lastOwnerId) {
+        const fallbackRaw = localStorage.getItem(resolveChatHistoryStorageKey(lastOwnerId));
+        if (fallbackRaw) {
+          const fallbackParsed = JSON.parse(fallbackRaw);
+          if (Array.isArray(fallbackParsed)) return fallbackParsed as ChatHistoryEntry[];
+        }
+      }
+    }
+    return [];
+  } catch {
+    return [];
+  }
+};
+
+const saveChatHistory = (entries: ChatHistoryEntry[], userId?: string | null) => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(resolveChatHistoryStorageKey(userId), JSON.stringify(entries));
+    if (userId) persistOwnerId(userId);
   } catch {
     // Ignore storage quota and private-mode write failures.
   }
@@ -738,6 +803,10 @@ export default function Index() {
     if (previousMessage === latest.message) return;
     persistedChatSnapshotRef.current.set(latest.id, latest.message);
 
+    // Sync chat history to localStorage
+    const ownerId = loadSecondMeSession()?.user?.userId ?? loadLastKnownOwnerId();
+    saveChatHistory(chatHistory, ownerId);
+
     const partnerName = agents.find((agent) => agent.id === latest.listenerId)?.name;
     void saveTreeChatHighlight(latest, partnerName);
     if ((latest.likes ?? 0) > 0 || (latest.comments ?? 0) > 0 || latest.isTrending) {
@@ -777,6 +846,47 @@ export default function Index() {
       if (persistedTreeSnapshotRef.current.get(agent.id) === snapshot) continue;
       persistedTreeSnapshotRef.current.set(agent.id, snapshot);
       void upsertTreeProfile(agent, { sceneState });
+    }
+
+    // Sync manual tree state changes to localStorage
+    if (manualAgents.length > 0) {
+      const ownerId = loadSecondMeSession()?.user?.userId ?? loadLastKnownOwnerId();
+      const existingLocal = loadManualTrees(ownerId);
+      const localById = new Map(existingLocal.map((e) => [e.id, e]));
+      let changed = false;
+      for (const agent of manualAgents) {
+        const existing = localById.get(agent.id);
+        if (!existing) continue; // not yet in localStorage (will be added at plant time)
+        const renderedTree = treeById.get(agent.id);
+        const updatedEntry: PersistedManualTreeEntry = {
+          ...existing,
+          worldX: agent.position.x,
+          worldY: agent.position.y,
+          name: agent.name,
+          tag: agent.tag,
+          personality: agent.personality,
+          bio: agent.metadata.bio,
+          lastWords: agent.metadata.lastWords,
+          energy: agent.energy,
+          generation: agent.generation,
+          parents: agent.parents,
+          socialCircle: agent.socialCircle,
+          intimacyMap: agent.intimacyMap,
+          shape: agent.shape,
+          size: renderedTree?.size ?? existing.size,
+          x: renderedTree ? agent.position.x - renderedTree.size / 2 : existing.x,
+          y: renderedTree ? agent.position.y - renderedTree.size : existing.y,
+        };
+        const prev = JSON.stringify(existing);
+        const next = JSON.stringify(updatedEntry);
+        if (prev !== next) {
+          localById.set(agent.id, updatedEntry);
+          changed = true;
+        }
+      }
+      if (changed) {
+        saveManualTrees([...localById.values()], ownerId);
+      }
     }
   }, [agents, trees]);
 
@@ -978,6 +1088,7 @@ export default function Index() {
           user: data.user ?? null,
         });
 
+        if (session.user?.userId) persistOwnerId(session.user.userId);
         const finalName = session.user?.name ?? session.user?.route ?? session.user?.email ?? '森林旅人';
         setUsername(finalName);
         setLoginModalOpen(false);
@@ -998,6 +1109,7 @@ export default function Index() {
         return;
       }
 
+      if (session.user?.userId) persistOwnerId(session.user.userId);
       const finalName = session.user?.name ?? session.user?.route ?? session.user?.email ?? '森林旅人';
       setUsername(finalName);
       setLoginModalOpen(false);
@@ -2151,6 +2263,18 @@ export default function Index() {
       const newOnes = restored.filter((t) => !existingIds.has(t.id));
       return newOnes.length > 0 ? [...prev, ...newOnes] : prev;
     });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Restore chat history from localStorage on mount.
+  useEffect(() => {
+    const ownerId = loadSecondMeSession()?.user?.userId ?? null;
+    const storedChat = loadChatHistory(ownerId);
+    if (storedChat.length === 0) return;
+
+    const { addChatHistoryEntry } = useForestStore.getState();
+    for (const entry of storedChat) {
+      addChatHistoryEntry(entry);
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

@@ -104,7 +104,10 @@ const invokeTreeProfilesFunction = async <T>(
   payload: Record<string, unknown> = {},
 ): Promise<T | null> => {
   const accessToken = getCurrentSecondMeAccessToken();
-  if (!accessToken) return null;
+  if (!accessToken) {
+    console.warn(`[treeProfileRepository] Skipping ${action}: no SecondMe access token (session missing or expired). Data saved to localStorage as fallback.`);
+    return null;
+  }
 
   const { data, error } = await supabase.functions.invoke(TREE_PROFILES_FUNCTION_NAME, {
     body: {
