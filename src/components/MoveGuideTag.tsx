@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MoveHorizontal } from 'lucide-react';
 
-const STORAGE_KEY = 'forest.move_guide_dismissed_v2';
+const STORAGE_KEY = 'forest.move_guide_dismissed_v4';
 const DRAG_THRESHOLD_PX = 60;
+// 引导至少稳定显示 8 秒后，用户再拖拽才触发消失
+const DISMISS_LISTEN_DELAY_MS = 8000;
 
 /** 检测用户是否已经关闭过引导，确保只显示一次。 */
 function hasBeenDismissed(): boolean {
@@ -24,8 +26,16 @@ function markDismissed() {
 
 export default function MoveGuideTag() {
   const [visible, setVisible] = useState(() => !hasBeenDismissed());
+  const [readyToDismiss, setReadyToDismiss] = useState(false);
   const downXRef = useRef<number | null>(null);
   const dismissedRef = useRef(false);
+
+  // 等动画完全呈现后才允许被拖拽消除
+  useEffect(() => {
+    if (!visible) return;
+    const timer = window.setTimeout(() => setReadyToDismiss(true), DISMISS_LISTEN_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [visible]);
 
   const dismiss = () => {
     if (dismissedRef.current) return;
@@ -35,7 +45,7 @@ export default function MoveGuideTag() {
   };
 
   useEffect(() => {
-    if (!visible) return;
+    if (!readyToDismiss) return;
 
     const handleDown = (e: PointerEvent | MouseEvent) => {
       downXRef.current = e.clientX;
@@ -68,17 +78,18 @@ export default function MoveGuideTag() {
       window.removeEventListener('pointermove', handleMove as (e: Event) => void);
       window.removeEventListener('pointerup', handleUp);
     };
-  }, [visible]);
+  }, [readyToDismiss]);
 
   return (
     <AnimatePresence>
       {visible && (
         <motion.div
           key="move-guide-tag"
-          initial={{ opacity: 0, y: 10 }}
+          initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 10, transition: { duration: 0.3 } }}
-          transition={{ delay: 1.5, duration: 0.5, ease: 'easeOut' }}
+          exit={{ opacity: 0, y: 16, transition: { duration: 0.4 } }}
+          transition={{ delay: 1.5, duration: 0.6, ease: 'easeOut' }}
+          style={{ opacity: 0 }}
           className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none"
           aria-hidden="true"
         >

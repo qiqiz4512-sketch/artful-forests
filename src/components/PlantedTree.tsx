@@ -267,6 +267,23 @@ const getGrowthSpring = (shapeId?: string) => {
 const ADORATION_DETECTION_RANGE = 300;
 export default function PlantedTree({ imageData, x, y, size, season = 'spring', isNew, growthMode = 'ambient', minY, maxY, agentId, profile, highlighted = false, active = false, onTreeClick, shakePromptSignal = 0, isAwaitingReply = false }: Props) {
   const [isHovered, setIsHovered] = useState(false);
+  const hoverLeaveTimerRef = useRef<number | null>(null);
+
+  const handleMouseEnter = () => {
+    if (hoverLeaveTimerRef.current !== null) {
+      window.clearTimeout(hoverLeaveTimerRef.current);
+      hoverLeaveTimerRef.current = null;
+    }
+    setIsHovered(true);
+  };
+
+  const handleMouseLeave = () => {
+    hoverLeaveTimerRef.current = window.setTimeout(() => {
+      setIsHovered(false);
+      hoverLeaveTimerRef.current = null;
+    }, 260);
+  };
+
   const [hasGrown, setHasGrown] = useState(false);
   const [userNudgeLines, setUserNudgeLines] = useState<string[]>([]);
   const [preferDynamicAsset, setPreferDynamicAsset] = useState(true);
@@ -482,6 +499,10 @@ export default function PlantedTree({ imageData, x, y, size, season = 'spring', 
     if (stageBurstTimerRef.current !== null) {
       window.clearTimeout(stageBurstTimerRef.current);
       stageBurstTimerRef.current = null;
+    }
+    if (hoverLeaveTimerRef.current !== null) {
+      window.clearTimeout(hoverLeaveTimerRef.current);
+      hoverLeaveTimerRef.current = null;
     }
   }, []);
 
@@ -756,8 +777,8 @@ export default function PlantedTree({ imageData, x, y, size, season = 'spring', 
               }
             : { rotate: { duration: depth.swayDuration * animationDurationScale, repeat: effectiveHovered ? Infinity : 0 } }
         }
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
         onClick={handleTreeClick}
       >
         <motion.div

@@ -15,6 +15,7 @@ type ActionName =
   | 'upsertTreeProfile'
   | 'fetchTreeProfile'
   | 'fetchAllTreeProfiles'
+  | 'deleteTreeProfile'
   | 'saveTreeChatHighlight'
   | 'saveConversationMessage'
   | 'fetchRecentConversationMessages'
@@ -137,6 +138,17 @@ serve(async (request) => {
           .order('updated_at', { ascending: false });
         if (error) return jsonResponse({ error: 'tree_profiles_fetch_all_failed', message: error.message }, 400);
         return jsonResponse({ data: data ?? [] });
+      }
+      case 'deleteTreeProfile': {
+        const treeId = String(payload?.treeId ?? '').trim();
+        if (!treeId) return invalid('treeId is required');
+        const { error } = await admin
+          .from('tree_profiles')
+          .delete()
+          .eq('secondme_user_id', identity.secondmeUserId)
+          .eq('tree_id', treeId);
+        if (error) return jsonResponse({ error: 'tree_profiles_delete_failed', message: error.message }, 400);
+        return jsonResponse({ data: true });
       }
       case 'saveTreeChatHighlight': {
         const row = {

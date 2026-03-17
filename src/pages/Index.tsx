@@ -16,6 +16,7 @@ import PlantingGhost from '@/components/PlantingGhost';
 import AgentLink from '@/components/AgentLink';
 import ChatPanel from '@/components/ChatPanel';
 import BgmMushroom from '@/components/BgmMushroom';
+import MoveGuideTag from '@/components/MoveGuideTag';
 import { useBgmAudio } from '@/components/BgmAudioProvider';
 import { toast } from '@/hooks/use-toast';
 import TreeSpeciesPanel from '@/components/TreeSpeciesPanel';
@@ -3259,6 +3260,8 @@ export default function Index() {
           maxY={maxPlantY}
         />
       )}
+
+      <MoveGuideTag />
 
       <ChatPanel
         messages={chatHistory}
