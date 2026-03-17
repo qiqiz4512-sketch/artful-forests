@@ -39,7 +39,7 @@ export default function AgentLink({ agents, offsetX = 0, visibleTreeIds = [] }: 
   const visibleLinkTargets = visibleTreeIdSet.size > 0
     ? agents.filter((agent) => visibleTreeIdSet.has(agent.id))
     : agents;
-  const passiveDivineClusterActive = Boolean(
+  const passiveDivineClusterActive = (divineSurgeActive || manualTreeFallbackActive) && Boolean(
     manualTree && visibleLinkTargets.some((agent) => {
       if (agent.id === manualTree.id || agent.isManual || agent.personality === '神启') return false;
       const dx = agent.position.x - manualTree.position.x;

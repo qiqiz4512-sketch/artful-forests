@@ -21,6 +21,7 @@ interface Props {
   activeTreeId?: string | null;
   focusInputSignal?: number;
   showComposer?: boolean;
+  onDeleteTree?: (treeId: string) => void;
 }
 
 const formatAgo = (createdAt: number, now: number) => {
@@ -57,6 +58,7 @@ export default function ChatPanel({
   activeTreeId = null,
   focusInputSignal = 0,
   showComposer = true,
+  onDeleteTree,
 }: Props) {
   const {
     activeAgentName,
@@ -378,6 +380,7 @@ export default function ChatPanel({
                       onSelectMessage={onSelectMessage}
                       onFocusTree={onFocusTree}
                       onMentionTree={handleMentionTree}
+                      onDeleteTree={onDeleteTree}
                       onRegisterMessageRef={(entryId, node) => {
                         if (node) {
                           messageItemRefs.current.set(entryId, node);

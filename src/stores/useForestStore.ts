@@ -39,6 +39,7 @@ interface ForestStoreState {
   emitSceneInteraction: (kind: SceneInteractionKind, phase: SceneInteractionPhase, targetTreeId: string) => void;
   recordDialogueMemory: (aId: string, bId: string, message: string, now?: number) => void;
   setMemoryRecallingFor: (ids: string[], durationMs: number) => void;
+  removeTree: (id: string) => void;
 }
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -205,6 +206,11 @@ export const useForestStore = create<ForestStoreState>((set, get) => ({
     conversationWeather: 'sunny',
     narrativeMode: 'dramatic',
     divineSurgeUntil: 0,
+  },
+  removeTree: (id) => {
+    set((state) => ({
+      agents: withNeighbors(state.agents.filter((agent) => agent.id !== id)),
+    }));
   },
   addTree: (tree) => {
     const nextAgent: TreeAgent = {

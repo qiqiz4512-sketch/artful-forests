@@ -378,6 +378,10 @@ export const saveTreeGrowthEvent = async (input: {
   await invokeTreeProfilesFunction<boolean>('saveTreeGrowthEvent', payload);
 };
 
+export const deleteTreeProfile = async (treeId: string): Promise<void> => {
+  await invokeTreeProfilesFunction<boolean>('deleteTreeProfile', { treeId });
+};
+
 export const fetchTreeGrowthEvents = async (
   treeId: string,
   limit = 30,

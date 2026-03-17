@@ -216,6 +216,7 @@ interface ChatMessageItemProps {
   onSelectMessage: (entry: ChatHistoryEntry) => void;
   onFocusTree: (treeId: string) => void;
   onMentionTree?: (treeId: string) => void;
+  onDeleteTree?: (treeId: string) => void;
   onRegisterMessageRef: (entryId: string, node: HTMLButtonElement | null) => void;
   formatAgo: (createdAt: number, now: number) => string;
 }
@@ -237,6 +238,7 @@ export function ChatMessageItem({
   onSelectMessage,
   onFocusTree,
   onMentionTree,
+  onDeleteTree,
   onRegisterMessageRef,
   formatAgo,
 }: ChatMessageItemProps) {
@@ -315,6 +317,7 @@ export function ChatMessageItem({
   );
 
   if (isEpic) {
+    const isManualSpeaker = Boolean(manualTreeId && entry.speakerId === manualTreeId);
     return (
       <motion.div
         key={entry.id}
@@ -325,24 +328,44 @@ export function ChatMessageItem({
         transition={{ duration: 0.24, ease: 'easeOut' }}
         className="mb-3 flex justify-center"
       >
-        <button
-          type="button"
-          onClick={() => onSelectMessage(entry)}
-          className="w-[94%] rounded-2xl px-3 py-3 text-left"
-          style={{
-            border: '1px solid transparent',
-            background:
-              'linear-gradient(145deg, rgba(34, 28, 12, 0.65), rgba(58, 43, 14, 0.48)) padding-box, linear-gradient(130deg, rgba(255, 215, 104, 0.95), rgba(198, 140, 38, 0.92), rgba(255, 232, 163, 0.95)) border-box',
-            boxShadow: '0 8px 24px rgba(125, 90, 20, 0.24)',
-            backdropFilter: 'blur(8px)',
-          }}
-        >
-          <div className="mb-1 flex items-center justify-between">
-            <span style={{ fontSize: 10, color: 'rgba(255, 232, 178, 0.94)' }}>神启公告</span>
-            <span style={{ fontSize: 10, color: 'rgba(255, 227, 162, 0.78)' }}>{formatAgo(entry.createdAt, now)}</span>
-          </div>
-          <p style={{ margin: 0, color: 'rgba(255, 246, 223, 0.96)', fontSize: 12, lineHeight: 1.6 }}>{entry.message}</p>
-        </button>
+        <div className="w-[94%] flex flex-col gap-1.5">
+          <button
+            type="button"
+            onClick={() => onSelectMessage(entry)}
+            className="w-full rounded-2xl px-3 py-3 text-left"
+            style={{
+              border: '1px solid transparent',
+              background:
+                'linear-gradient(145deg, rgba(34, 28, 12, 0.65), rgba(58, 43, 14, 0.48)) padding-box, linear-gradient(130deg, rgba(255, 215, 104, 0.95), rgba(198, 140, 38, 0.92), rgba(255, 232, 163, 0.95)) border-box',
+              boxShadow: '0 8px 24px rgba(125, 90, 20, 0.24)',
+              backdropFilter: 'blur(8px)',
+            }}
+          >
+            <div className="mb-1 flex items-center justify-between">
+              <span style={{ fontSize: 10, color: 'rgba(255, 232, 178, 0.94)' }}>神启公告</span>
+              <span style={{ fontSize: 10, color: 'rgba(255, 227, 162, 0.78)' }}>{formatAgo(entry.createdAt, now)}</span>
+            </div>
+            <p style={{ margin: 0, color: 'rgba(255, 246, 223, 0.96)', fontSize: 12, lineHeight: 1.6 }}>{entry.message}</p>
+          </button>
+          {isManualSpeaker && onDeleteTree && (
+            <button
+              type="button"
+              onClick={() => onDeleteTree(entry.speakerId)}
+              className="self-center flex items-center gap-1.5 px-3 py-1"
+              style={{
+                borderRadius: 999,
+                background: 'rgba(239, 68, 68, 0.12)',
+                border: '1px solid rgba(239, 68, 68, 0.38)',
+                color: 'rgba(220, 60, 60, 0.9)',
+                fontSize: 11,
+                cursor: 'pointer',
+              }}
+            >
+              <span style={{ fontSize: 13, lineHeight: 1 }}>×</span>
+              移除这棵神启树
+            </button>
+          )}
+        </div>
       </motion.div>
     );
   }

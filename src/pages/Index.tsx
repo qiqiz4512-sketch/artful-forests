@@ -29,7 +29,7 @@ import { useForestEcology } from '@/hooks/useForestEcology';
 import { useAutoPlanting, renderTreeShapeToDataUrl } from '@/hooks/useAutoPlanting';
 import { generateRandomProfile } from '@/lib/agentProfile';
 import { generateClusteredTrees } from '@/lib/forestClusters';
-import { fetchAllTreeProfiles, saveConversationMessage, saveRelationshipEvent, saveTreeChatHighlight, saveTreeGrowthEvent, upsertTreeEngagementEvent, upsertTreeProfile } from '@/lib/treeProfileRepository';
+import { fetchAllTreeProfiles, saveConversationMessage, saveRelationshipEvent, saveTreeChatHighlight, saveTreeGrowthEvent, upsertTreeEngagementEvent, upsertTreeProfile, deleteTreeProfile } from '@/lib/treeProfileRepository';
 import {
   buildSecondMeAuthorizeUrl,
   clearSecondMeCallbackParams,
@@ -545,6 +545,7 @@ export default function Index() {
   const syncAgentsFromScene = useForestStore((state) => state.syncAgentsFromScene);
   const refreshNeighbors = useForestStore((state) => state.refreshNeighbors);
   const addTree = useForestStore((state) => state.addTree);
+  const removeTree = useForestStore((state) => state.removeTree);
   const triggerGlobalSilence = useForestStore((state) => state.triggerGlobalSilence);
   const triggerDivineSurge = useForestStore((state) => state.triggerDivineSurge);
   const setConversationWeather = useForestStore((state) => state.setConversationWeather);
@@ -1438,6 +1439,22 @@ export default function Index() {
       setChatCollapsed(false);
     }
   }, [activeDialogueAgentId, agents, chatCollapsed, setActiveDialogueAgent]);
+
+  const handleDeleteTree = useCallback((treeId: string) => {
+    // Remove from local trees state
+    setTrees((current) => current.filter((tree) => tree.id !== treeId));
+    // Remove from forest store
+    removeTree(treeId);
+    // Remove from localStorage
+    const ownerId = loadSecondMeSession()?.user?.userId ?? null;
+    const existing = loadManualTrees(ownerId);
+    saveManualTrees(existing.filter((entry) => entry.id !== treeId), ownerId);
+    // Remove from Supabase (best-effort)
+    void deleteTreeProfile(treeId);
+    // Clear active state if this was the focused/active tree
+    if (activeDialogueAgentId === treeId) setActiveDialogueAgent(null);
+    setFocusedTreeId((current) => current === treeId ? null : current);
+  }, [activeDialogueAgentId, removeTree, setActiveDialogueAgent]);
 
   const fetchSoftMemorySnippets = useCallback(async (accessToken: string, keyword: string): Promise<string[]> => {
     const query = new URLSearchParams({
@@ -2946,6 +2963,7 @@ export default function Index() {
                 isAwaitingReply={activeDialogueAgentId === tree.id && profile.socialState === SocialState.TALKING}
                 shakePromptSignal={treeShakePromptSignalById[tree.id] ?? 0}
                 onTreeClick={handleTreeActivate}
+                onDeleteTree={profile.isManual ? handleDeleteTree : undefined}
               />
             );
           })}
@@ -3256,6 +3274,7 @@ export default function Index() {
         activeTreeId={activeDialogueAgentId}
         focusInputSignal={chatInputFocusSignal}
         showComposer
+        onDeleteTree={handleDeleteTree}
       />
 
       {/* <BgmAutoplayBlockedToast /> */}
@@ -3272,6 +3291,7 @@ export default function Index() {
         agents={agents}
         visibleTreeIds={visibleTreeIds}
         activeZoneLabel={activeEcologyZone.label}
+        onDeleteTree={handleDeleteTree}
       />
 
       <AnimatePresence>

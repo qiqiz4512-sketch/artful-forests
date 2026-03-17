@@ -50,8 +50,6 @@ export default function TreePerchedBirds({ season, trees, interactionEvent = nul
     return () => window.clearTimeout(timer);
   }, [interactionEvent]);
 
-  if (season !== 'spring' && season !== 'summer') return null;
-
   const visibleSpots = useMemo(() => {
     const spots: BirdSpot[] = [];
     for (const tree of trees) {
@@ -84,6 +82,8 @@ export default function TreePerchedBirds({ season, trees, interactionEvent = nul
 
     return spots.slice(0, 16);
   }, [season, trees]);
+
+  if (season !== 'spring' && season !== 'summer') return null;
 
   const targetTree = interactionEvent ? trees.find((tree) => tree.id === interactionEvent.targetTreeId) : null;
 
