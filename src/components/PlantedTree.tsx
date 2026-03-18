@@ -1097,27 +1097,6 @@ export default function PlantedTree({ imageData, x, y, size, season = 'spring', 
               )}
             </AnimatePresence>
 
-            {isDivineManual && (
-              <motion.div
-                className="absolute inset-[4%] pointer-events-none"
-                animate={{
-                  scale: [1, 1.05, 1],
-                  boxShadow: [
-                    '0 0 0 1px rgba(250, 204, 21, 0.5), 0 0 8px rgba(250, 204, 21, 0.42)',
-                    '0 0 0 1px rgba(244, 114, 182, 0.44), 0 0 12px rgba(96, 165, 250, 0.38)',
-                    '0 0 0 1px rgba(167, 243, 208, 0.46), 0 0 10px rgba(250, 204, 21, 0.48)',
-                    '0 0 0 1px rgba(250, 204, 21, 0.5), 0 0 8px rgba(250, 204, 21, 0.42)',
-                  ],
-                }}
-                transition={{ duration: 3.6, repeat: Infinity, ease: 'easeInOut' }}
-                style={{
-                  borderRadius: '52% 48% 50% 46%',
-                  border: '1px solid rgba(250, 204, 21, 0.55)',
-                  filter: 'drop-shadow(0 0 8px rgba(250, 204, 21, 0.45))',
-                }}
-              />
-            )}
-
             {active && (
               <motion.div
                 className="absolute left-1/2 -translate-x-1/2 pointer-events-none"

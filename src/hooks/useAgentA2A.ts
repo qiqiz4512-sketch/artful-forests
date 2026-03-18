@@ -4,6 +4,8 @@ import { NarrativeMode, SocialState, SpeakingPace } from '@/types/forest';
 import { useForestStore } from '@/stores/useForestStore';
 import { getWorldEcologySocialMood, getWorldEcologyZone, inferWorldWidthFromPositions } from '@/lib/worldEcology';
 import { RECENT_TOPIC_CONTINUATION_WINDOW_MS, buildRecentTopicContinuation, calculatePartnerCompatibility, classifySocialEvent, generateSocialChat, getRelationType, isDivineTree, resolveMemoryCue } from '@/lib/treeSociety';
+import { treeAgentDialogueConfigManager } from '@/lib/treeAgentDialogueConfig';
+import { generateTreeAgentRespons } from '@/lib/treeAgentAdapter';
 
 const randomIn = <T,>(arr: readonly T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
@@ -407,10 +409,82 @@ export function useAgentA2A() {
       const divineSurgeActive = Date.now() < state.globalEffects.divineSurgeUntil;
       const interactionBoost = divineSurgeActive ? DIVINE_SURGE_CHAT_MULTIPLIER : 1;
       const delay = (A2A_BASE_DELAY_MS + Math.random() * A2A_DELAY_JITTER_MS) / (averageWeight * interactionBoost);
-      mainTimer = window.setTimeout(runConversation, delay);
+      mainTimer = window.setTimeout(() => runConversationAsync(), delay);
     };
 
-    const runConversation = () => {
+    /**
+     * 异步对话生成函数
+     * 使用新的Agent系统或fallback到模板库
+     */
+    const generateBaseMessageAsync = async (
+      nextA: (typeof agents)[number],
+      nextB: (typeof agents)[number],
+      shouldPrioritizeRecentTopic: boolean,
+      recentTopic: string,
+      echoText: string | undefined,
+      intimacy: number,
+      conversationWeather: string,
+      isAgentModeEnabled: boolean,
+    ): Promise<string> => {
+      try {
+        if (!isAgentModeEnabled) {
+          // 如果禁用了Agent模式，直接使用模板库
+          return shouldPrioritizeRecentTopic
+            ? buildRecentTopicContinuation(nextA, nextB, {
+                topic: recentTopic || '森林',
+                echoText,
+                intimacy,
+              })
+            : generateSocialChat(nextA, nextB, {
+                weather: conversationWeather,
+                season: currentSeason(),
+                intimacy,
+                echoText,
+              });
+        }
+
+        // 使用新的Agent系统
+        if (shouldPrioritizeRecentTopic) {
+          // 话题延续优先级高，使用Agent系统
+          return await generateTreeAgentRespons(nextA, nextB, {
+            weather: conversationWeather,
+            season: currentSeason(),
+            intimacy,
+            echoText,
+            recentTopic,
+            allAgents: useForestStore.getState().agents,
+            useTemplateOnly: false,
+          });
+        } else {
+          // 新对话，使用Agent系统
+          return await generateTreeAgentRespons(nextA, nextB, {
+            weather: conversationWeather,
+            season: currentSeason(),
+            intimacy,
+            echoText,
+            allAgents: useForestStore.getState().agents,
+            useTemplateOnly: false,
+          });
+        }
+      } catch (error) {
+        console.warn('Failed to generate message with Agent system, falling back to template', error);
+        // Fallback到模板库
+        return shouldPrioritizeRecentTopic
+          ? buildRecentTopicContinuation(nextA, nextB, {
+              topic: recentTopic || '森林',
+              echoText,
+              intimacy,
+            })
+          : generateSocialChat(nextA, nextB, {
+              weather: conversationWeather,
+              season: currentSeason(),
+              intimacy,
+              echoText,
+            });
+      }
+    };
+
+    const runConversationAsync = async () => {
       const store = useForestStore.getState();
       if (Date.now() < store.globalEffects.silenceUntil) {
         schedule();
@@ -565,18 +639,20 @@ export function useAgentA2A() {
         memoryCue?.mode === 'continuation'
         || (echoText && recentTopic),
       );
-      const baseMessage = shouldPrioritizeRecentTopic
-        ? buildRecentTopicContinuation(nextA, nextB, {
-            topic: recentTopic || '森林',
-            echoText,
-            intimacy,
-          })
-        : generateSocialChat(nextA, nextB, {
-            weather: conversationWeather,
-            season: currentSeason(),
-            intimacy,
-            echoText,
-          });
+
+      // 使用新的Agent系统生成对话
+      const isAgentModeEnabled = treeAgentDialogueConfigManager.getConfig().enableAgentDialogue;
+      const baseMessage = await generateBaseMessageAsync(
+        nextA,
+        nextB,
+        shouldPrioritizeRecentTopic,
+        recentTopic || '森林',
+        echoText,
+        intimacy,
+        conversationWeather,
+        isAgentModeEnabled,
+      );
+
       const memoryLead = memoryCue ? `${nextB.name}：${memoryCue.line}` : null;
       const maybeFeedback =
         relation !== 'stranger' && Math.random() < (narrativeMode === 'dramatic' ? 0.68 : 0.52)
