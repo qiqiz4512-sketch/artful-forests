@@ -1162,6 +1162,20 @@ export default function Index() {
       return;
     }
 
+    // 检测 origin 不匹配：当前页面 origin 与 redirect_uri origin 不一致时，
+    // OAuth 回调后 sessionStorage 会因 origin 不同而读取失败，导致 state 校验错误
+    try {
+      const redirectOrigin = new URL(SECONDME_REDIRECT_URI).origin;
+      if (window.location.origin !== redirectOrigin) {
+        showAuthError(
+          `当前访问地址 (${window.location.origin}) 与回调地址不一致，请改用 ${redirectOrigin} 打开本页后重试`
+        );
+        return;
+      }
+    } catch {
+      // SECONDME_REDIRECT_URI 解析失败时忽略，继续流程
+    }
+
     setSsoSubmitting(true);
     setLoginError('');
 

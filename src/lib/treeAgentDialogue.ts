@@ -354,6 +354,204 @@ async function callTreeLLM(systemPrompt: string, userPrompt: string): Promise<st
 }
 
 /**
+ * 本地智能对话生成（当LLM不可用时使用）
+ * 基于树的性格、关系和环境生成自然对话
+ */
+function generateLocalAgentDialogue(context: TreeAgentContext): string {
+  const { speaker, listener, relation, intimacy, weather, season, echoText } = context;
+  
+  // 根据性格和关系选择对话模板
+  const templates = getDialogueTemplates(speaker.personality, relation, intimacy);
+  const template = templates[Math.floor(Math.random() * templates.length)];
+  
+  // 替换变量
+  let dialogue = template
+    .replace('{listener}', listener.name)
+    .replace('{weather}', getWeatherEmoji(weather))
+    .replace('{season}', getSeasonName(season));
+  
+  // 如果有最近的话语，有一定概率直接回应
+  if (echoText && Math.random() < 0.4) {
+    const responseTemplate = getEchoResponseTemplate(speaker.personality);
+    dialogue = responseTemplate.replace('{echo}', echoText.slice(0, 20));
+  }
+  
+  return dialogue.trim();
+}
+
+/**
+ * 获取不同性格和关系的对话模板
+ */
+function getDialogueTemplates(personality: string, relation: string, intimacy: number): string[] {
+  const templates: Record<string, Record<string, string[]>> = {
+    温柔: {
+      stranger: [
+        '你好呀，{listener}，很高兴认识你。',
+        '嗯...你好。我是{listener}附近的一棵树。',
+        '慢慢来，咱们一起度过这个美好的{season}吧。',
+      ],
+      friend: [
+        '{listener}，天气真好呢，你最近怎么样？',
+        '你好啊，在享受这个{season}的时光吗？',
+        '很开心能和你相聚，希望我们一起长得更茁壮。',
+      ],
+      family: [
+        '{listener}姐/妹，陪你一起看{season}的风景。',
+        '家族就是这样，坚守在彼此身边。',
+        '有你在身边，我感到很安心。',
+      ],
+      partner: [
+        '你知道吗，有你在就足够了。',
+        '咱们一起经历春夏秋冬，这就是幸福。',
+        '每一刻和你在一起都闪闪发光。',
+      ],
+    },
+    睿智: {
+      stranger: [
+        '每个生命都有其独特的价值。你好，{listener}。',
+        '我观察了许久，想和你分享些想法。',
+        '在这个森林里，我们都在寻找智慧。',
+      ],
+      friend: [
+        '再次相遇，想必是命运的安排。',
+        '{listener}，我有些事想和你探讨。',
+        '树叶又一次绿了，而我们的友谊依然如初。',
+      ],
+      family: [
+        '血脉相连，我们共同承载过去和未来。',
+        '家族的智慧在每一代传递。',
+      ],
+      partner: [
+        '你就像我的另一半树根，支撑着我的生长。',
+        '两棵树的故事最精彩的部分，就是一起看世界。',
+      ],
+    },
+    活泼: {
+      stranger: [
+        '嘿！{listener}！我是你的新邻居！',
+        '太棒了！又认识了新朋友！{listener}，咱们一起疯玩吧！',
+        '走走走，一起去看{season}的盛景！',
+      ],
+      friend: [
+        '{listener}！你这家伙，好久不见！',
+        '天哪，{season}的风好舒服！咱们一起摇晃吧！',
+        '你不知道吗？我刚发生了超级有趣的事！',
+      ],
+      family: [
+        '兄弟姐妹们，出来作妖！',
+        '咱们一起长，一起闹，这就是族群的快乐！',
+      ],
+      partner: [
+        '宝贝，我好想你！',
+        '和你在一起永远都不无聊！',
+      ],
+    },
+    社恐: {
+      stranger: [
+        '...你...你好... {listener}...',
+        '哦...嗯...我...我叫{listener}附近的小树...',
+        '那个...如果你不介意的话...咱们可以...认识一下...',
+      ],
+      friend: [
+        '{listener}... 你...你好吗... 最近还好吗...',
+        '嗯...虽然话不多...但我一直有注意你...',
+        '谢谢你...一直陪我...',
+      ],
+      family: [
+        '有你们...我没那么害怕...',
+        '家...就是最安全的地方...',
+      ],
+      partner: [
+        '你...你是...我的勇气...',
+        '只要你在...我就不害怕...',
+      ],
+    },
+    调皮: {
+      stranger: [
+        '嘿哈！新邻居{listener}，看我的新绝招！',
+        '你是新来的？哈哈，我决定了，以后咱们就是朋友啦！',
+        '敢和我比谁的树叶更翠绿吗？',
+      ],
+      friend: [
+        '{listener}老兄，又有新点子了，你准备好了吗？',
+        '哈哈，我又想到一个捣乱的妙招，要不要参与？',
+        '{season}来了，咱们一起玩点不一样的！',
+      ],
+      family: [
+        '嘿，咱们一起折腾，看谁最皮！',
+        '兄弟姐妹，今天咱们要闹翻天！',
+      ],
+      partner: [
+        '老婆/老公，让我们做对最坏的树吧！',
+        '和你一起捣乱，人生才有意思！',
+      ],
+    },
+    神启: {
+      stranger: [
+        '缘分使然，我们相遇了。',
+        '你，注定会在我的故事里。',
+      ],
+      friend: [
+        '命运的齿轮，又转过了一圈。',
+        '{listener}，我有预感...',
+      ],
+      family: [
+        '血脉即是宿命。',
+        '一切都按定数进行。',
+      ],
+      partner: [
+        '你是我前世今生的注定。',
+        '我们的爱，超越了时空。',
+      ],
+    },
+  };
+
+  const personalityTemplates = templates[personality] || templates['温柔'];
+  return personalityTemplates[relation] || personalityTemplates['stranger'];
+}
+
+/**
+ * 当有最近对话时的回应模板
+ */
+function getEchoResponseTemplate(personality: string): string {
+  const templates: Record<string, string> = {
+    温柔: '嗯，你说的"{echo}"很有道理呢，我也这么想。',
+    睿智: '"{echo}"...这确实值得思考。',
+    活泼: '哈哈，你说得对！我也超喜欢！',
+    社恐: '...嗯...我...我也觉得..."{echo}"...很好...',
+    调皮: '"{echo}"？哈哈，你这家伙真有意思！',
+    神启: '"{echo}"...是啊，诸法如是。',
+  };
+  return templates[personality] || '"{echo}"...你说的没错。';
+}
+
+/**
+ * 获取天气emoji
+ */
+function getWeatherEmoji(weather?: string): string {
+  const emojis: Record<string, string> = {
+    sunny: '☀️晴天',
+    rain: '🌧️雨天',
+    snow: '❄️雪天',
+    night: '🌙夜晚',
+  };
+  return emojis[weather || 'sunny'] || '阳光下';
+}
+
+/**
+ * 获取季节名称
+ */
+function getSeasonName(season?: string): string {
+  const names: Record<string, string> = {
+    spring: '春天',
+    summer: '夏天',
+    autumn: '秋天',
+    winter: '冬天',
+  };
+  return names[season || 'spring'] || '季节';
+}
+
+/**
  * SecondMe API调用
  */
 async function callSecondMeA2ADialogueSync(
@@ -389,33 +587,130 @@ async function callSecondMeA2ADialogueSync(
 /**
  * OpenAI API调用（占位符，可在后续实现）
  */
-async function callOpenAIDialogue(_systemPrompt: string, _userPrompt: string, _model: string): Promise<string> {
-  // TODO: 实现OpenAI API调用
-  return '';
+async function callOpenAIDialogue(systemPrompt: string, userPrompt: string, _model: string): Promise<string> {
+  const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
+  const apiBase = import.meta.env.VITE_OPENAI_API_BASE || 'https://api.openai.com/v1';
+  const model = import.meta.env.VITE_OPENAI_MODEL || 'gpt-4o-mini';
+
+  if (!apiKey) return '';
+
+  const resp = await fetch(`${apiBase}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      max_tokens: 120,
+      temperature: 0.85,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!resp.ok) return '';
+  const data = await resp.json();
+  return data.choices?.[0]?.message?.content?.trim() ?? '';
 }
 
 /**
- * Claude API调用（占位符，可在后续实现）
+ * Claude API调用
  */
-async function callClaudeDialogue(_systemPrompt: string, _userPrompt: string, _model: string): Promise<string> {
-  // TODO: 实现Claude API调用
-  return '';
+async function callClaudeDialogue(systemPrompt: string, userPrompt: string, _model: string): Promise<string> {
+  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
+  const model = import.meta.env.VITE_ANTHROPIC_MODEL || 'claude-haiku-4-5';
+
+  if (!apiKey) return '';
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      max_tokens: 120,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!resp.ok) return '';
+  const data = await resp.json();
+  return data.content?.[0]?.text?.trim() ?? '';
 }
 
 /**
- * Ollama API调用（占位符，可在后续实现）
+ * Ollama 本地 LLM 调用（无需 API Key，OpenAI 兼容接口）
+ * 安装方法: https://ollama.ai
+ * 推荐模型: qwen2.5:3b  mistral  llama3.2
  */
-async function callOllamaDialogue(_systemPrompt: string, _userPrompt: string, _model: string): Promise<string> {
-  // TODO: 实现Ollama API调用
-  return '';
+async function callOllamaDialogue(systemPrompt: string, userPrompt: string, _model: string): Promise<string> {
+  const base = import.meta.env.VITE_OLLAMA_BASE_URL || 'http://localhost:11434';
+  const model = import.meta.env.VITE_OLLAMA_MODEL || 'qwen2.5:3b';
+
+  try {
+    const resp = await fetch(`${base}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        stream: false,
+        options: { temperature: 0.85, num_predict: 120 },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!resp.ok) return '';
+    const data = await resp.json();
+    return data.message?.content?.trim() ?? '';
+  } catch {
+    return '';
+  }
 }
 
 /**
- * Together AI API调用（占位符，可在后续实现）
+ * Together AI 调用（有免费额度，OpenAI 兼容）
+ * 申请 key: https://together.ai
  */
-async function callTogetherAIDialogue(_systemPrompt: string, _userPrompt: string, _model: string): Promise<string> {
-  // TODO: 实现Together AI API调用
-  return '';
+async function callTogetherAIDialogue(systemPrompt: string, userPrompt: string, _model: string): Promise<string> {
+  const apiKey = import.meta.env.VITE_TOGETHER_API_KEY;
+  const model = import.meta.env.VITE_TOGETHER_MODEL || 'Qwen/Qwen2.5-7B-Instruct-Turbo';
+
+  if (!apiKey) return '';
+
+  const resp = await fetch('https://api.together.xyz/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      max_tokens: 120,
+      temperature: 0.85,
+    }),
+    signal: AbortSignal.timeout(8000),
+  });
+
+  if (!resp.ok) return '';
+  const data = await resp.json();
+  return data.choices?.[0]?.message?.content?.trim() ?? '';
 }
 
 /**
@@ -465,20 +760,8 @@ function getMaxLengthForPersonality(personality: string): number {
  * Fallback对话生成（当LLM不可用时）
  */
 function generateFallbackDialogue(context: TreeAgentContext): string {
-  // 这里可以调用现有的 generateSocialChat 等函数
-  // 但我们在这个文件中独立实现一个简单的备选方案
-
-  const fallbacks: Record<string, string[]> = {
-    温柔: ['慢慢来没关系。', '我会陪你。', '别急，我在听。', '你说得对。'],
-    睿智: ['这件事可以慢慢想。', '有意思。', '我同意这个看法。', '继续说呀。'],
-    活泼: ['太有意思了！', '对对对！', '我也是这样想的！', '继续继续！'],
-    社恐: ['嗯...', '那个...', '谢谢你。', '好的...'],
-    调皮: ['你看这...', '逗你呢。', '差不多行了。', '不行我得笑。'],
-    神启: ['命运如此。', '本神官看透了。', '天意。', '虚实之间。'],
-  };
-
-  const dialogues = fallbacks[context.speaker.personality] || fallbacks['温柔'];
-  return dialogues[Math.floor(Math.random() * dialogues.length)];
+  // 使用本地智能对话生成器
+  return generateLocalAgentDialogue(context);
 }
 
 /**

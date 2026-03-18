@@ -143,16 +143,16 @@ export interface TreeAgentDialogueConfig {
  */
 export const DEFAULT_TREE_AGENT_DIALOGUE_CONFIG: TreeAgentDialogueConfig = {
   enableAgentDialogue: true,
-  enableLLM: true, // ✅ 默认启用SecondMe LLM
-  llmProvider: 'secondme', // ✅ 使用SecondMe作为主提供商
+  enableLLM: true,
+  llmProvider: 'ollama', // 本地优先，无需登录；如有 API Key 可改为 'openai'/'together'
   llmModel: {
-    openai: 'gpt-3.5-turbo',
-    anthropic: 'claude-3-haiku',
-    secondme: 'secondme-default',
-    ollama: 'mistral',
-    together: 'mistral-7b',
+    openai: 'gpt-4o-mini',
+    anthropic: 'claude-haiku-4-5',
+    secondme: 'google_ai_studio/gemini-2.0-flash',
+    ollama: 'qwen2.5:3b',
+    together: 'Qwen/Qwen2.5-7B-Instruct-Turbo',
   },
-  llmTimeout: 8000, // SecondMe通常需要更长的超时时间
+  llmTimeout: 10000,
   enableDialogueCache: true,
   dialogueCacheTTL: 5 * 60 * 1000,
   llmTemperature: 0.8,

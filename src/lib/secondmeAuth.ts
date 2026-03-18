@@ -54,14 +54,17 @@ export function buildSecondMeAuthorizeUrl(options: {
 
 export function createSecondMeState(): string {
   const state = `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-  sessionStorage.setItem(SECONDME_STATE_STORAGE_KEY, state);
+  try { sessionStorage.setItem(SECONDME_STATE_STORAGE_KEY, state); } catch { /* 隐私模式可能禁用 sessionStorage */ }
+  try { localStorage.setItem(SECONDME_STATE_STORAGE_KEY, state); } catch { /* 隐私模式可能禁用 localStorage */ }
   return state;
 }
 
 export function consumeSecondMeState(): string | null {
-  const state = sessionStorage.getItem(SECONDME_STATE_STORAGE_KEY);
+  const fromSession = sessionStorage.getItem(SECONDME_STATE_STORAGE_KEY);
+  const fromLocal = localStorage.getItem(SECONDME_STATE_STORAGE_KEY);
   sessionStorage.removeItem(SECONDME_STATE_STORAGE_KEY);
-  return state;
+  localStorage.removeItem(SECONDME_STATE_STORAGE_KEY);
+  return fromSession ?? fromLocal ?? null;
 }
 
 export function readSecondMeCallbackParams(url: URL = new URL(window.location.href)): SecondMeCallbackParams {

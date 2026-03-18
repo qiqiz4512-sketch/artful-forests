@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
   return {
     appType: "spa",
     server: {
-      host: "127.0.0.1",
+      host: "localhost",
       port: 8080,
       hmr: {
         host: "localhost",
