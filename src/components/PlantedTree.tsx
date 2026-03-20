@@ -337,7 +337,7 @@ export default function PlantedTree({ imageData, x, y, size, season = 'spring', 
       left: `${-35 + Math.random() * 170}%`,
       top: `${-20 + Math.random() * 110}%`,
       sizePx: 2 + Math.random() * 3,
-      delay: Math.random() * 1.6,
+      delay: Math.random() * 2.4,
       driftX: (Math.random() - 0.5) * 140,
       sinkDistance: 180 + Math.random() * 180,
     }));

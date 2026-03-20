@@ -472,6 +472,23 @@ export default function DrawingPanel({ isOpen, onClose, onPlant }: Props) {
                 </button>
               </div>
             </div>
+
+            {/* 画好提示 */}
+            <AnimatePresence>
+              {canPlant && (
+                <motion.div
+                  key="return-hint"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 4 }}
+                  transition={{ duration: 0.3, ease: 'easeOut' }}
+                  className="text-center font-ui text-[11px] leading-relaxed"
+                  style={{ color: 'rgba(98, 120, 88, 0.72)' }}
+                >
+                  🍂 在图鉴中轻点落叶，让树木化作灵感养分，归还大地。
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </motion.div>
       )}

@@ -1160,7 +1160,7 @@
     );
     box-shadow: 0 0 3px 1px rgba(200, 165, 60, 0.3);
     opacity: 0;
-    animation: glimmer-and-sink 3.2s ease-in forwards;
+    animation: glimmer-and-sink 5s ease-in forwards;
     will-change: transform, opacity;
   }
 

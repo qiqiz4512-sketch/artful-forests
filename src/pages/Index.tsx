@@ -187,22 +187,6 @@ const saveTreeChatSessions = (sessions: TreeChatSessionMap, userId?: string | nu
 // ── Owner ID persistence (survives session expiry) ────────────────────────────
 const FOREST_LAST_OWNER_ID_KEY = 'forest.last_owner_id';
 
-// ── New-user onboarding: delete-guide & collection-opened flags ───────────────
-const FOREST_DELETE_GUIDE_KEY = 'forest.has_shown_delete_guide';
-const FOREST_COLLECTION_OPENED_KEY = 'forest.has_opened_collection';
-const hasShownDeleteGuide = (): boolean => {
-  try { return localStorage.getItem(FOREST_DELETE_GUIDE_KEY) === '1'; } catch { return false; }
-};
-const markDeleteGuideShown = () => {
-  try { localStorage.setItem(FOREST_DELETE_GUIDE_KEY, '1'); } catch {}
-};
-const hasOpenedCollection = (): boolean => {
-  try { return localStorage.getItem(FOREST_COLLECTION_OPENED_KEY) === '1'; } catch { return false; }
-};
-const markCollectionOpened = () => {
-  try { localStorage.setItem(FOREST_COLLECTION_OPENED_KEY, '1'); } catch {}
-};
-
 const persistOwnerId = (ownerId: string | null) => {
   if (!ownerId) return;
   try { localStorage.setItem(FOREST_LAST_OWNER_ID_KEY, ownerId); } catch { /* quota */ }
@@ -633,10 +617,9 @@ export default function Index() {
   const [openPopover, setOpenPopover] = useState<'season' | 'weather' | 'time' | null>(null);
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [focusedTreeId, setFocusedTreeId] = useState<string | null>(null);
-  const [fadingTreeIds, setFadingTreeIds] = useState<Set<string>>(new Set());
-  const [leafPulse, setLeafPulse] = useState(() => !hasOpenedCollection());
   const [chatInputFocusSignal, setChatInputFocusSignal] = useState(0);
   const [treeShakePromptSignalById, setTreeShakePromptSignalById] = useState<Record<string, number>>({});
+  const [fadingTreeIds, setFadingTreeIds] = useState<Set<string>>(new Set());
   const [seedDrift, setSeedDrift] = useState<{ id: string; glyph: '🍃' | '🪶'; fromY: number; toY: number } | null>(null);
   const [celestialEffect, setCelestialEffect] = useState<'meteor' | 'aurora' | null>(null);
   const [divineBloom, setDivineBloom] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -676,6 +659,7 @@ export default function Index() {
   const ownManualTreesBackupRef = useRef<PersistedManualTreeEntry[]>([]);
   const [currentForestOwner, setCurrentForestOwner] = useState<{ ownerId: string; ownerName: string } | null>(null);
   const [isVisitTransitioning, setIsVisitTransitioning] = useState(false);
+  const [isReturnTransitioning, setIsReturnTransitioning] = useState(false);
   const [forestDirectoryOpen, setForestDirectoryOpen] = useState(false);
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1000;
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
@@ -890,22 +874,21 @@ export default function Index() {
     const manualAgents = agents.filter((agent) => agent.isManual);
     const ownerId = loadSecondMeSession()?.user?.userId ?? loadLastKnownOwnerId();
     const deletedIds = loadDeletedTreeIds(ownerId);
-    const localById = new Map(loadManualTrees(ownerId).map((e) => [e.id, e]));
     for (const agent of manualAgents) {
       // Never re-upsert a tree that has been marked as deleted; that would undo the delete.
       if (deletedIds.has(agent.id)) continue;
       const renderedTree = treeById.get(agent.id);
-      // If no renderedTree yet (Zustand updated before React trees state committed), fall back
-      // to the localStorage size so we can still persist a valid sceneState to Supabase.
-      const localEntry = localById.get(agent.id);
-      if (!renderedTree && !localEntry) continue; // truly no size info yet – skip
-      const renderSize = renderedTree?.size ?? localEntry!.size;
-      const sceneState = {
-        renderSize,
-        positionX: agent.position.x,
-        positionY: agent.position.y,
-        spawnType: renderedTree?.spawnType ?? 'manual',
-      };
+      const sceneState = renderedTree
+        ? {
+            renderSize: renderedTree.size,
+            positionX: agent.position.x,
+            positionY: agent.position.y,
+            spawnType: renderedTree.spawnType,
+          }
+        : {
+            positionX: agent.position.x,
+            positionY: agent.position.y,
+          };
       const snapshot = JSON.stringify({
         name: agent.name,
         personality: agent.personality,
@@ -1536,7 +1519,7 @@ export default function Index() {
     if (activeDialogueAgentId === treeId) setActiveDialogueAgent(null);
     setFocusedTreeId((current) => current === treeId ? null : current);
 
-    // Step 1: Start fade-out animation
+    // Step 1: Trigger dissolve animation via fading prop
     setFadingTreeIds((prev) => new Set([...prev, treeId]));
 
     // Step 2: After animation completes, perform actual deletion
@@ -1557,7 +1540,7 @@ export default function Index() {
       // cover the race where a concurrent upsertTreeProfile completes after this call.
       void deleteTreeProfile(treeId);
       setTimeout(() => void deleteTreeProfile(treeId), 2500);
-    }, 2100); // 2100ms: covers the 1.8s tree-dissolve-downward animation + particle flash
+    }, 7800); // 7800ms: covers 5s particle animation + 2.4s max delay + buffer
   }, [activeDialogueAgentId, removeTree, setActiveDialogueAgent]);
 
   const visitForest = useCallback(async (ownerInfo: { ownerId: string; ownerName: string }) => {
@@ -1576,22 +1559,23 @@ export default function Index() {
       const myOwnerId = loadSecondMeSession()?.user?.userId ?? null;
       ownManualTreesBackupRef.current = loadManualTrees(myOwnerId);
 
-      // Snapshot IDs to remove: own manual trees + any currently-visiting trees.
-      // Capture these BEFORE the await so the cleanup is deterministic.
+      // Capture IDs to evict BEFORE the async gap so the set is deterministic.
       const storeSnapshot = useForestStore.getState();
-      const idsToRemoveFromStore = new Set<string>([
+      const idsToEvict = new Set<string>([
         ...storeSnapshot.agents.filter((a) => a.isManual).map((a) => a.id),
         ...visitingTreeIdsRef.current,
       ]);
 
-      // Synchronously remove from the Zustand store right now.
-      for (const id of idsToRemoveFromStore) {
+      // Synchronously remove evicted trees from Zustand store.
+      for (const id of idsToEvict) {
         useForestStore.getState().removeTree(id);
       }
       visitingTreeIdsRef.current = new Set();
 
-      // Fetch visited user's trees (async gap – do NOT touch trees state before this resolves).
+      // ── async gap ──────────────────────────────────────────────────────────
       const profiles = await fetchTreeProfilesByOwner(ownerInfo.ownerId);
+      // ──────────────────────────────────────────────────────────────────────
+
       const { addTree: storeAddTree } = useForestStore.getState();
       const newVisitingIds = new Set<string>();
       const newVisitingTreeData: TreeData[] = [];
@@ -1641,11 +1625,11 @@ export default function Index() {
         });
       }
 
-      // Single atomic trees-state update: remove ALL old visiting/manual trees and add
-      // the new forest's trees in one pass to prevent any intermediate render from
+      // Single atomic trees-state update: remove ALL evicted trees and add the
+      // new forest's trees in one operation to prevent any intermediate render
       // showing a mix of old and new hand-drawn trees.
       setTrees((prev) => {
-        const filtered = prev.filter((t) => !idsToRemoveFromStore.has(t.id));
+        const filtered = prev.filter((t) => !idsToEvict.has(t.id));
         const existingIds = new Set(filtered.map((t) => t.id));
         const additions = newVisitingTreeData.filter((t) => !existingIds.has(t.id));
         return additions.length > 0 ? [...filtered, ...additions] : filtered;
@@ -1665,19 +1649,25 @@ export default function Index() {
   }, [isVisitTransitioning, showTreeNotice, stopAutoPlanting, username]);
 
   const returnToOwnForest = useCallback(() => {
-    // Remove all visiting trees
+    setIsReturnTransitioning(true);
+
+    // Delay the actual forest switch so the animation is visible
+    setTimeout(() => {
+    // Capture visiting IDs before clearing the ref.
+    const visitingIds = new Set(visitingTreeIdsRef.current);
+
+    // Remove visiting trees from Zustand store.
     const storeState = useForestStore.getState();
-    for (const id of visitingTreeIdsRef.current) {
+    for (const id of visitingIds) {
       storeState.removeTree(id);
     }
-    setTrees((prev) => prev.filter((t) => !visitingTreeIdsRef.current.has(t.id)));
     visitingTreeIdsRef.current = new Set();
 
-    // Restore own manual trees from backup
+    // Re-add own manual trees to Zustand store.
     const backup = ownManualTreesBackupRef.current;
+    const ownTreeData: TreeData[] = [];
     if (backup.length > 0) {
       const { addTree: storeAddTree } = useForestStore.getState();
-      const restoredIds = new Set<string>();
       for (const entry of backup) {
         storeAddTree({
           id: entry.id,
@@ -1700,27 +1690,31 @@ export default function Index() {
           isManual: true,
           shape: entry.shape,
         });
-        restoredIds.add(entry.id);
-        setTrees((prev) => {
-          if (prev.some((t) => t.id === entry.id)) return prev;
-          return [
-            ...prev,
-            {
-              id: entry.id,
-              imageData: entry.imageData,
-              x: entry.x,
-              y: entry.y,
-              size: entry.size,
-              spawnType: 'manual' as const,
-            },
-          ];
+        ownTreeData.push({
+          id: entry.id,
+          imageData: entry.imageData,
+          x: entry.x,
+          y: entry.y,
+          size: entry.size,
+          spawnType: 'manual' as const,
         });
       }
     }
 
+    // Single atomic trees-state update: remove all visiting trees and add own trees at once.
+    setTrees((prev) => {
+      const filtered = prev.filter((t) => !visitingIds.has(t.id));
+      const existingIds = new Set(filtered.map((t) => t.id));
+      const additions = ownTreeData.filter((t) => !existingIds.has(t.id));
+      return additions.length > 0 ? [...filtered, ...additions] : filtered;
+    });
+
     setCurrentForestOwner(null);
     startAutoPlanting();
     showTreeNotice('已回到自己的森林', '欢迎回家', '🏡', 2400);
+
+    setIsReturnTransitioning(false);
+    }, 900);
   }, [showTreeNotice, startAutoPlanting]);
 
   const fetchSoftMemorySnippets = useCallback(async (accessToken: string, keyword: string): Promise<string[]> => {
@@ -2484,17 +2478,14 @@ export default function Index() {
     };
     saveManualTrees([...existingStored.filter((e) => e.id !== id), newEntry], ownerId);
 
-    // Persist to Supabase immediately with explicit sceneState derived from known local values.
-    // This avoids relying on the [agents, trees] sync effect which can miss the first render
-    // if the Zustand agents update fires before the React trees state is committed.
-    const plantedAgent = useForestStore.getState().agents.find((a) => a.id === id);
-    if (plantedAgent) {
-      void upsertTreeProfile(plantedAgent, {
-        sceneState: { renderSize: size, positionX: worldX, positionY: clampedY, spawnType: 'manual' },
-      });
-    }
+    window.setTimeout(() => {
+      const plantedAgent = useForestStore.getState().agents.find((agent) => agent.id === id);
+      if (plantedAgent) {
+        void upsertTreeProfile(plantedAgent);
+      }
+    }, 0);
 
-    triggerGlobalSilence(3000, '造物主降下了新的生命，万物静许。', id);
+    triggerGlobalSilence(3000, '造物主降下了新的生命，万物静听。', id);
     triggerDivineSurge(10_000);
   playManualFirstHeartbeat();
     setDivineBloom({ id, x, y: clampedY });
@@ -2509,16 +2500,6 @@ export default function Index() {
     setPlantingTreeName('');
     setPlantingPersonality('');
     setTimeout(() => setNewTreeId(null), 3500);
-
-    // Show a hint about the delete feature after the divine planting notice fades
-    setTimeout(() => {
-      showTreeNotice(
-        '这棵树画得真棒！',
-        '如果你以后想让它化作养分去旅行，只需要在图鉴里点击那片小落叶 🍂 就可以送走它哦。',
-        '🌿',
-        8000,
-      );
-    }, 11_000); // fires just after the 10s divine planting notice fades
   }, [addTree, plantingImage, plantingDrawingData, plantingTreeName, plantingPersonality, playManualFirstHeartbeat, scrollX, showTreeNotice, triggerDivineSurge, triggerGlobalSilence, username, worldWidth]);
 
   // Restore manually-planted trees from localStorage on mount.
@@ -2599,14 +2580,13 @@ export default function Index() {
       // lost to a race condition with a concurrent upsert call.
       const deletedIds = loadDeletedTreeIds(ownerId);
 
-      const localById = new Map(loadManualTrees(ownerId).map((e) => [e.id, e]));
       const existingAgentIds = new Set(useForestStore.getState().agents.map((agent) => agent.id));
       const { addTree: storeAddTree } = useForestStore.getState();
       const restoredEntries: PersistedManualTreeEntry[] = [];
       const restoredTrees: TreeData[] = [];
 
       for (const profile of profiles) {
-        if (!profile.isManual || !profile.drawingImageData) continue;
+        if (!profile.isManual || !profile.drawingImageData || existingAgentIds.has(profile.treeId)) continue;
         if (deletedIds.has(profile.treeId)) {
           // Tree was deleted locally; ensure it is also removed from Supabase.
           void deleteTreeProfile(profile.treeId);
@@ -2614,39 +2594,13 @@ export default function Index() {
         }
 
         const sceneState = (profile.metadata.sceneState ?? {}) as Record<string, unknown>;
-        let renderSize = Number(sceneState.renderSize ?? 0);
-        let positionX = Number(sceneState.positionX ?? 0);
-        let positionY = Number(sceneState.positionY ?? 0);
-        const supabaseHasBadSceneState = !Number.isFinite(renderSize) || renderSize <= 0;
-
-        // Fallback: if Supabase sceneState is missing/zero (e.g. saved before the race-condition
-        // fix), try to recover values from localStorage.
-        if (supabaseHasBadSceneState && localById.has(profile.treeId)) {
-          const local = localById.get(profile.treeId)!;
-          renderSize = local.size;
-          positionX = local.worldX;
-          positionY = local.worldY;
-        }
-
+        const renderSize = Number(sceneState.renderSize ?? 0);
+        const positionX = Number(sceneState.positionX ?? 0);
+        const positionY = Number(sceneState.positionY ?? 0);
         if (!Number.isFinite(renderSize) || renderSize <= 0) continue;
         if (!Number.isFinite(positionX) || !Number.isFinite(positionY)) continue;
 
         const tag = typeof profile.metadata.tag === 'string' ? profile.metadata.tag : undefined;
-
-        // If this tree was already restored from localStorage (mount effect ran first),
-        // skip re-adding it to the store/trees, but still repair Supabase if sceneState was bad.
-        if (existingAgentIds.has(profile.treeId)) {
-          if (supabaseHasBadSceneState) {
-            // Repair the corrupted sceneState in Supabase now that we have valid values.
-            const agent = useForestStore.getState().agents.find((a) => a.id === profile.treeId);
-            if (agent) {
-              void upsertTreeProfile(agent, {
-                sceneState: { renderSize, positionX, positionY, spawnType: 'manual' },
-              });
-            }
-          }
-          continue;
-        }
 
         storeAddTree({
           id: profile.treeId,
@@ -3287,7 +3241,6 @@ export default function Index() {
                 isAwaitingReply={activeDialogueAgentId === tree.id && profile.socialState === SocialState.TALKING}
                 shakePromptSignal={treeShakePromptSignalById[tree.id] ?? 0}
                 onTreeClick={handleTreeActivate}
-                onDeleteTree={profile.isManual ? handleDeleteTree : undefined}
                 fading={fadingTreeIds.has(tree.id)}
               />
             );
@@ -3721,13 +3674,6 @@ export default function Index() {
         visibleTreeIds={visibleTreeIds}
         activeZoneLabel={activeEcologyZone.label}
         onDeleteTree={handleDeleteTree}
-        showLeafPulse={leafPulse}
-        onCollectionOpen={() => {
-          if (leafPulse) {
-            markCollectionOpened();
-            setLeafPulse(false);
-          }
-        }}
       />
 
       <AnimatePresence>
@@ -3847,6 +3793,46 @@ export default function Index() {
               }}
             >
               正在传送到陌生的森林…
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Return Transition Overlay ── */}
+      <AnimatePresence>
+        {isReturnTransitioning && (
+          <motion.div
+            key="return-transition"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.55, ease: 'easeInOut' }}
+            className="fixed inset-0 pointer-events-none z-[200] flex flex-col items-center justify-center"
+            style={{
+              background: 'radial-gradient(ellipse at center, rgba(18,48,32,0.84) 0%, rgba(6,22,14,0.93) 100%)',
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.7, opacity: 0 }}
+              animate={{ scale: [0.7, 1.15, 1], opacity: 1 }}
+              transition={{ duration: 0.72, ease: 'easeOut' }}
+              style={{ fontSize: 56, lineHeight: 1 }}
+            >
+              🏡
+            </motion.div>
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.28, duration: 0.4 }}
+              className="font-ui"
+              style={{
+                marginTop: 18,
+                fontSize: 16,
+                color: 'rgba(210,245,225,0.92)',
+                letterSpacing: '0.06em',
+              }}
+            >
+              正在回到自己的森林…
             </motion.div>
           </motion.div>
         )}
