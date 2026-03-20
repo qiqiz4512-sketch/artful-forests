@@ -1787,6 +1787,9 @@ export default function Index() {
         treeBId: manualTree?.id ?? targetTree.id,
         message: finalReply,
       });
+      if (manualTree) {
+        store.changeIntimacy(manualTree.id, targetTree.id, 5);
+      }
       console.log('[SendMessage/U2A] LLM对话完成成功');
       return true;
     } catch (error) {
@@ -1974,6 +1977,9 @@ export default function Index() {
           treeBId: manualTree?.id ?? targetTree.id,
           message: finalReply,
         });
+        if (manualTree) {
+          store.changeIntimacy(manualTree.id, targetTree.id, 5);
+        }
       } catch (error) {
         const failureText = '森林信道短暂中断，请再和我说一次。';
         flushTypewriterImmediately(replyEntryId, failureText);
