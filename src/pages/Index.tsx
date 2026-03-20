@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo, type CSSProperties } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Sparkles } from 'lucide-react';
 import type { WeatherType } from '@/components/Particles';
 import { useTimeTheme, type TimeMode, type TimeTheme } from '@/hooks/useTimeTheme';
 import ParallaxBackground from '@/components/ParallaxBackground';
@@ -22,6 +23,7 @@ import { toast } from '@/hooks/use-toast';
 import TreeSpeciesPanel from '@/components/TreeSpeciesPanel';
 import CelestialCelebration from '@/components/CelestialCelebration';
 import ForestLoginModal from '@/components/ForestLoginModal';
+import ForestDirectory from '@/components/ForestDirectory';
 import { getTreeDepthMetrics } from '@/lib/treeDepth';
 import { useForestStore } from '@/stores/useForestStore';
 import { ChatHistoryEntry, SceneInteractionEvent, SceneTreeSnapshot, SocialState } from '@/types/forest';
@@ -30,7 +32,7 @@ import { useForestEcology } from '@/hooks/useForestEcology';
 import { useAutoPlanting, renderTreeShapeToDataUrl } from '@/hooks/useAutoPlanting';
 import { generateRandomProfile } from '@/lib/agentProfile';
 import { generateClusteredTrees } from '@/lib/forestClusters';
-import { fetchAllTreeProfiles, saveConversationMessage, saveRelationshipEvent, saveTreeChatHighlight, saveTreeGrowthEvent, upsertTreeEngagementEvent, upsertTreeProfile, deleteTreeProfile } from '@/lib/treeProfileRepository';
+import { fetchAllTreeProfiles, saveConversationMessage, saveRelationshipEvent, saveTreeChatHighlight, saveTreeGrowthEvent, upsertTreeEngagementEvent, upsertTreeProfile, deleteTreeProfile, fetchForestDirectory, fetchTreeProfilesByOwner, refreshOwnerNickname, type ForestDirectoryEntry } from '@/lib/treeProfileRepository';
 import {
   buildSecondMeAuthorizeUrl,
   clearSecondMeCallbackParams,
@@ -185,6 +187,22 @@ const saveTreeChatSessions = (sessions: TreeChatSessionMap, userId?: string | nu
 // ── Owner ID persistence (survives session expiry) ────────────────────────────
 const FOREST_LAST_OWNER_ID_KEY = 'forest.last_owner_id';
 
+// ── New-user onboarding: delete-guide & collection-opened flags ───────────────
+const FOREST_DELETE_GUIDE_KEY = 'forest.has_shown_delete_guide';
+const FOREST_COLLECTION_OPENED_KEY = 'forest.has_opened_collection';
+const hasShownDeleteGuide = (): boolean => {
+  try { return localStorage.getItem(FOREST_DELETE_GUIDE_KEY) === '1'; } catch { return false; }
+};
+const markDeleteGuideShown = () => {
+  try { localStorage.setItem(FOREST_DELETE_GUIDE_KEY, '1'); } catch {}
+};
+const hasOpenedCollection = (): boolean => {
+  try { return localStorage.getItem(FOREST_COLLECTION_OPENED_KEY) === '1'; } catch { return false; }
+};
+const markCollectionOpened = () => {
+  try { localStorage.setItem(FOREST_COLLECTION_OPENED_KEY, '1'); } catch {}
+};
+
 const persistOwnerId = (ownerId: string | null) => {
   if (!ownerId) return;
   try { localStorage.setItem(FOREST_LAST_OWNER_ID_KEY, ownerId); } catch { /* quota */ }
@@ -252,6 +270,50 @@ const saveManualTrees = (entries: PersistedManualTreeEntry[], userId?: string | 
     if (userId) persistOwnerId(userId);
   } catch {
     // Ignore storage quota and private-mode write failures.
+  }
+};
+
+// ── Deleted tree tombstones ──────────────────────────────────────────────────
+// Tracks IDs of trees the user has explicitly deleted, so that remote restore
+// on refresh cannot bring them back even if the Supabase delete is still in
+// flight or lost to a race with a concurrent upsert.
+const FOREST_DELETED_TREES_KEY = 'forest.deleted_trees';
+const resolveDeletedTreesStorageKey = (userId?: string | null) =>
+  userId ? `${FOREST_DELETED_TREES_KEY}:${userId}` : FOREST_DELETED_TREES_KEY;
+
+const loadDeletedTreeIds = (userId?: string | null): Set<string> => {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = localStorage.getItem(resolveDeletedTreesStorageKey(userId));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return new Set(parsed as string[]);
+    }
+    // Fallback: try last known owner ID when current session is expired
+    if (!userId) {
+      const lastOwnerId = loadLastKnownOwnerId();
+      if (lastOwnerId) {
+        const fallbackRaw = localStorage.getItem(resolveDeletedTreesStorageKey(lastOwnerId));
+        if (fallbackRaw) {
+          const fallbackParsed = JSON.parse(fallbackRaw);
+          if (Array.isArray(fallbackParsed)) return new Set(fallbackParsed as string[]);
+        }
+      }
+    }
+    return new Set();
+  } catch {
+    return new Set();
+  }
+};
+
+const addDeletedTreeId = (treeId: string, userId?: string | null) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const existing = loadDeletedTreeIds(userId);
+    existing.add(treeId);
+    localStorage.setItem(resolveDeletedTreesStorageKey(userId), JSON.stringify([...existing]));
+  } catch {
+    // Ignore storage failures.
   }
 };
 
@@ -571,6 +633,8 @@ export default function Index() {
   const [openPopover, setOpenPopover] = useState<'season' | 'weather' | 'time' | null>(null);
   const [chatCollapsed, setChatCollapsed] = useState(false);
   const [focusedTreeId, setFocusedTreeId] = useState<string | null>(null);
+  const [fadingTreeIds, setFadingTreeIds] = useState<Set<string>>(new Set());
+  const [leafPulse, setLeafPulse] = useState(() => !hasOpenedCollection());
   const [chatInputFocusSignal, setChatInputFocusSignal] = useState(0);
   const [treeShakePromptSignalById, setTreeShakePromptSignalById] = useState<Record<string, number>>({});
   const [seedDrift, setSeedDrift] = useState<{ id: string; glyph: '🍃' | '🪶'; fromY: number; toY: number } | null>(null);
@@ -608,6 +672,11 @@ export default function Index() {
   const lastGuardianMessageAtRef = useRef(0);
   const growthStageByTreeRef = useRef<Record<string, ReturnType<typeof getAgentGrowthStage>>>({});
   const remoteRestoreOwnerRef = useRef<string | null>(null);
+  const visitingTreeIdsRef = useRef<Set<string>>(new Set());
+  const ownManualTreesBackupRef = useRef<PersistedManualTreeEntry[]>([]);
+  const [currentForestOwner, setCurrentForestOwner] = useState<{ ownerId: string; ownerName: string } | null>(null);
+  const [isVisitTransitioning, setIsVisitTransitioning] = useState(false);
+  const [forestDirectoryOpen, setForestDirectoryOpen] = useState(false);
   const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1000;
   const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
   const worldWidth = Math.max(WORLD_WIDTH_MIN, viewportWidth * WORLD_WIDTH_MULTIPLIER);
@@ -819,19 +888,24 @@ export default function Index() {
   useEffect(() => {
     const treeById = new Map(trees.map((tree) => [tree.id, tree]));
     const manualAgents = agents.filter((agent) => agent.isManual);
+    const ownerId = loadSecondMeSession()?.user?.userId ?? loadLastKnownOwnerId();
+    const deletedIds = loadDeletedTreeIds(ownerId);
+    const localById = new Map(loadManualTrees(ownerId).map((e) => [e.id, e]));
     for (const agent of manualAgents) {
+      // Never re-upsert a tree that has been marked as deleted; that would undo the delete.
+      if (deletedIds.has(agent.id)) continue;
       const renderedTree = treeById.get(agent.id);
-      const sceneState = renderedTree
-        ? {
-            renderSize: renderedTree.size,
-            positionX: agent.position.x,
-            positionY: agent.position.y,
-            spawnType: renderedTree.spawnType,
-          }
-        : {
-            positionX: agent.position.x,
-            positionY: agent.position.y,
-          };
+      // If no renderedTree yet (Zustand updated before React trees state committed), fall back
+      // to the localStorage size so we can still persist a valid sceneState to Supabase.
+      const localEntry = localById.get(agent.id);
+      if (!renderedTree && !localEntry) continue; // truly no size info yet – skip
+      const renderSize = renderedTree?.size ?? localEntry!.size;
+      const sceneState = {
+        renderSize,
+        positionX: agent.position.x,
+        positionY: agent.position.y,
+        spawnType: renderedTree?.spawnType ?? 'manual',
+      };
       const snapshot = JSON.stringify({
         name: agent.name,
         personality: agent.personality,
@@ -852,11 +926,11 @@ export default function Index() {
 
     // Sync manual tree state changes to localStorage
     if (manualAgents.length > 0) {
-      const ownerId = loadSecondMeSession()?.user?.userId ?? loadLastKnownOwnerId();
       const existingLocal = loadManualTrees(ownerId);
       const localById = new Map(existingLocal.map((e) => [e.id, e]));
       let changed = false;
       for (const agent of manualAgents) {
+        if (deletedIds.has(agent.id)) continue; // do not re-write deleted entries
         const existing = localById.get(agent.id);
         if (!existing) continue; // not yet in localStorage (will be added at plant time)
         const renderedTree = treeById.get(agent.id);
@@ -1098,6 +1172,7 @@ export default function Index() {
         setSsoSubmitting(false);
         setLoginPulse((prev) => prev + 1);
         showAuthCelebration(`欢迎回来，${finalName}`, `已激活 SecondMe 通行证`, '🎐', 2600);
+        if (finalName && finalName !== '森林旅人') void refreshOwnerNickname(finalName);
         return;
       }
 
@@ -1116,6 +1191,7 @@ export default function Index() {
       setUsername(finalName);
       setLoginModalOpen(false);
       setAuthInitializing(false);
+      if (finalName && finalName !== '森林旅人') void refreshOwnerNickname(finalName);
     };
 
     void syncUser();
@@ -1456,20 +1532,196 @@ export default function Index() {
   }, [activeDialogueAgentId, agents, chatCollapsed, setActiveDialogueAgent]);
 
   const handleDeleteTree = useCallback((treeId: string) => {
-    // Remove from local trees state
-    setTrees((current) => current.filter((tree) => tree.id !== treeId));
-    // Remove from forest store
-    removeTree(treeId);
-    // Remove from localStorage
-    const ownerId = loadSecondMeSession()?.user?.userId ?? null;
-    const existing = loadManualTrees(ownerId);
-    saveManualTrees(existing.filter((entry) => entry.id !== treeId), ownerId);
-    // Remove from Supabase (best-effort)
-    void deleteTreeProfile(treeId);
-    // Clear active state if this was the focused/active tree
+    // Clear active state immediately so UI feels responsive
     if (activeDialogueAgentId === treeId) setActiveDialogueAgent(null);
     setFocusedTreeId((current) => current === treeId ? null : current);
+
+    // Step 1: Start fade-out animation
+    setFadingTreeIds((prev) => new Set([...prev, treeId]));
+
+    // Step 2: After animation completes, perform actual deletion
+    setTimeout(() => {
+      setFadingTreeIds((prev) => { const next = new Set(prev); next.delete(treeId); return next; });
+      // Remove from local trees state
+      setTrees((current) => current.filter((tree) => tree.id !== treeId));
+      // Remove from forest store
+      removeTree(treeId);
+      // Remove from localStorage
+      const ownerId = loadSecondMeSession()?.user?.userId ?? null;
+      const existing = loadManualTrees(ownerId);
+      saveManualTrees(existing.filter((entry) => entry.id !== treeId), ownerId);
+      // Record tombstone so remote restore on refresh cannot bring the tree back,
+      // even if the Supabase delete is still in-flight or races with a pending upsert.
+      addDeletedTreeId(treeId, ownerId);
+      // Remove from Supabase: fire immediately, then retry after a short delay to
+      // cover the race where a concurrent upsertTreeProfile completes after this call.
+      void deleteTreeProfile(treeId);
+      setTimeout(() => void deleteTreeProfile(treeId), 2500);
+    }, 2100); // 2100ms: covers the 1.8s tree-dissolve-downward animation + particle flash
   }, [activeDialogueAgentId, removeTree, setActiveDialogueAgent]);
+
+  const visitForest = useCallback(async (ownerInfo: { ownerId: string; ownerName: string }) => {
+    if (isVisitTransitioning) return;
+    if (!username) {
+      setLoginModalOpen(true);
+      showTreeNotice('请先登录', '登录后才能探访他人的森林哦', '🔐', 2400);
+      return;
+    }
+    setForestDirectoryOpen(false);
+    setIsVisitTransitioning(true);
+    stopAutoPlanting();
+
+    try {
+      // Backup own manual trees before leaving
+      const myOwnerId = loadSecondMeSession()?.user?.userId ?? null;
+      ownManualTreesBackupRef.current = loadManualTrees(myOwnerId);
+
+      // Snapshot IDs to remove: own manual trees + any currently-visiting trees.
+      // Capture these BEFORE the await so the cleanup is deterministic.
+      const storeSnapshot = useForestStore.getState();
+      const idsToRemoveFromStore = new Set<string>([
+        ...storeSnapshot.agents.filter((a) => a.isManual).map((a) => a.id),
+        ...visitingTreeIdsRef.current,
+      ]);
+
+      // Synchronously remove from the Zustand store right now.
+      for (const id of idsToRemoveFromStore) {
+        useForestStore.getState().removeTree(id);
+      }
+      visitingTreeIdsRef.current = new Set();
+
+      // Fetch visited user's trees (async gap – do NOT touch trees state before this resolves).
+      const profiles = await fetchTreeProfilesByOwner(ownerInfo.ownerId);
+      const { addTree: storeAddTree } = useForestStore.getState();
+      const newVisitingIds = new Set<string>();
+      const newVisitingTreeData: TreeData[] = [];
+
+      for (const profile of profiles) {
+        if (!profile.drawingImageData) continue;
+        const sceneState = (profile.metadata.sceneState ?? {}) as Record<string, unknown>;
+        const renderSize = Number(sceneState.renderSize ?? 0);
+        const positionX = Number(sceneState.positionX ?? 0);
+        const positionY = Number(sceneState.positionY ?? 0);
+        if (!Number.isFinite(renderSize) || renderSize <= 0) continue;
+        if (!Number.isFinite(positionX) || !Number.isFinite(positionY)) continue;
+
+        const visitId = `visit-${profile.treeId}`;
+        const tag = typeof profile.metadata.tag === 'string' ? profile.metadata.tag : undefined;
+
+        storeAddTree({
+          id: visitId,
+          position: { x: positionX, y: positionY },
+          scale: 1,
+          zIndex: Math.floor(positionY),
+          name: profile.name,
+          tag,
+          personality: profile.personality,
+          metadata: {
+            bio: profile.bio,
+            lastWords: profile.lastWords,
+            drawingImageData: profile.drawingImageData,
+            drawingData: profile.drawingData as any,
+          },
+          energy: profile.energy,
+          generation: profile.generation,
+          parents: profile.parents,
+          socialCircle: profile.socialCircle as any,
+          intimacyMap: profile.intimacyMap,
+          isManual: false,
+        });
+
+        newVisitingIds.add(visitId);
+        newVisitingTreeData.push({
+          id: visitId,
+          imageData: profile.drawingImageData!,
+          x: positionX - renderSize / 2,
+          y: positionY - renderSize,
+          size: renderSize,
+          spawnType: 'manual' as const,
+        });
+      }
+
+      // Single atomic trees-state update: remove ALL old visiting/manual trees and add
+      // the new forest's trees in one pass to prevent any intermediate render from
+      // showing a mix of old and new hand-drawn trees.
+      setTrees((prev) => {
+        const filtered = prev.filter((t) => !idsToRemoveFromStore.has(t.id));
+        const existingIds = new Set(filtered.map((t) => t.id));
+        const additions = newVisitingTreeData.filter((t) => !existingIds.has(t.id));
+        return additions.length > 0 ? [...filtered, ...additions] : filtered;
+      });
+
+      visitingTreeIdsRef.current = newVisitingIds;
+      setCurrentForestOwner(ownerInfo);
+      showTreeNotice(
+        `正在进入 ${ownerInfo.ownerName} 的幻想森林`,
+        `已传送到 ${ownerInfo.ownerName} 的专属森林`,
+        '✨',
+        3200,
+      );
+    } finally {
+      setIsVisitTransitioning(false);
+    }
+  }, [isVisitTransitioning, showTreeNotice, stopAutoPlanting, username]);
+
+  const returnToOwnForest = useCallback(() => {
+    // Remove all visiting trees
+    const storeState = useForestStore.getState();
+    for (const id of visitingTreeIdsRef.current) {
+      storeState.removeTree(id);
+    }
+    setTrees((prev) => prev.filter((t) => !visitingTreeIdsRef.current.has(t.id)));
+    visitingTreeIdsRef.current = new Set();
+
+    // Restore own manual trees from backup
+    const backup = ownManualTreesBackupRef.current;
+    if (backup.length > 0) {
+      const { addTree: storeAddTree } = useForestStore.getState();
+      const restoredIds = new Set<string>();
+      for (const entry of backup) {
+        storeAddTree({
+          id: entry.id,
+          position: { x: entry.worldX, y: entry.worldY },
+          scale: 1,
+          zIndex: Math.floor(entry.worldY),
+          name: entry.name,
+          tag: entry.tag,
+          personality: entry.personality,
+          metadata: {
+            bio: entry.bio,
+            lastWords: entry.lastWords,
+            drawingImageData: entry.imageData,
+          },
+          energy: entry.energy,
+          generation: entry.generation,
+          parents: entry.parents,
+          socialCircle: entry.socialCircle,
+          intimacyMap: entry.intimacyMap,
+          isManual: true,
+          shape: entry.shape,
+        });
+        restoredIds.add(entry.id);
+        setTrees((prev) => {
+          if (prev.some((t) => t.id === entry.id)) return prev;
+          return [
+            ...prev,
+            {
+              id: entry.id,
+              imageData: entry.imageData,
+              x: entry.x,
+              y: entry.y,
+              size: entry.size,
+              spawnType: 'manual' as const,
+            },
+          ];
+        });
+      }
+    }
+
+    setCurrentForestOwner(null);
+    startAutoPlanting();
+    showTreeNotice('已回到自己的森林', '欢迎回家', '🏡', 2400);
+  }, [showTreeNotice, startAutoPlanting]);
 
   const fetchSoftMemorySnippets = useCallback(async (accessToken: string, keyword: string): Promise<string[]> => {
     const query = new URLSearchParams({
@@ -2232,14 +2484,17 @@ export default function Index() {
     };
     saveManualTrees([...existingStored.filter((e) => e.id !== id), newEntry], ownerId);
 
-    window.setTimeout(() => {
-      const plantedAgent = useForestStore.getState().agents.find((agent) => agent.id === id);
-      if (plantedAgent) {
-        void upsertTreeProfile(plantedAgent);
-      }
-    }, 0);
+    // Persist to Supabase immediately with explicit sceneState derived from known local values.
+    // This avoids relying on the [agents, trees] sync effect which can miss the first render
+    // if the Zustand agents update fires before the React trees state is committed.
+    const plantedAgent = useForestStore.getState().agents.find((a) => a.id === id);
+    if (plantedAgent) {
+      void upsertTreeProfile(plantedAgent, {
+        sceneState: { renderSize: size, positionX: worldX, positionY: clampedY, spawnType: 'manual' },
+      });
+    }
 
-    triggerGlobalSilence(3000, '造物主降下了新的生命，万物静听。', id);
+    triggerGlobalSilence(3000, '造物主降下了新的生命，万物静许。', id);
     triggerDivineSurge(10_000);
   playManualFirstHeartbeat();
     setDivineBloom({ id, x, y: clampedY });
@@ -2254,13 +2509,24 @@ export default function Index() {
     setPlantingTreeName('');
     setPlantingPersonality('');
     setTimeout(() => setNewTreeId(null), 3500);
+
+    // Show a hint about the delete feature after the divine planting notice fades
+    setTimeout(() => {
+      showTreeNotice(
+        '这棵树画得真棒！',
+        '如果你以后想让它化作养分去旅行，只需要在图鉴里点击那片小落叶 🍂 就可以送走它哦。',
+        '🌿',
+        8000,
+      );
+    }, 11_000); // fires just after the 10s divine planting notice fades
   }, [addTree, plantingImage, plantingDrawingData, plantingTreeName, plantingPersonality, playManualFirstHeartbeat, scrollX, showTreeNotice, triggerDivineSurge, triggerGlobalSilence, username, worldWidth]);
 
   // Restore manually-planted trees from localStorage on mount.
   // This runs before the sample-trees effect so the sample-trees merge won't overwrite them.
   useEffect(() => {
     const ownerId = loadSecondMeSession()?.user?.userId ?? null;
-    const stored = loadManualTrees(ownerId);
+    const deletedIds = loadDeletedTreeIds(ownerId);
+    const stored = loadManualTrees(ownerId).filter((entry) => !deletedIds.has(entry.id));
     if (stored.length === 0) return;
 
     const { addTree: storeAddTree } = useForestStore.getState();
@@ -2328,22 +2594,59 @@ export default function Index() {
       const profiles = await fetchAllTreeProfiles();
       if (cancelled || profiles.length === 0) return;
 
+      // Filter out trees the user has explicitly deleted locally. This prevents
+      // a tree from reappearing if the Supabase delete is still in-flight or was
+      // lost to a race condition with a concurrent upsert call.
+      const deletedIds = loadDeletedTreeIds(ownerId);
+
+      const localById = new Map(loadManualTrees(ownerId).map((e) => [e.id, e]));
       const existingAgentIds = new Set(useForestStore.getState().agents.map((agent) => agent.id));
       const { addTree: storeAddTree } = useForestStore.getState();
       const restoredEntries: PersistedManualTreeEntry[] = [];
       const restoredTrees: TreeData[] = [];
 
       for (const profile of profiles) {
-        if (!profile.isManual || !profile.drawingImageData || existingAgentIds.has(profile.treeId)) continue;
+        if (!profile.isManual || !profile.drawingImageData) continue;
+        if (deletedIds.has(profile.treeId)) {
+          // Tree was deleted locally; ensure it is also removed from Supabase.
+          void deleteTreeProfile(profile.treeId);
+          continue;
+        }
 
         const sceneState = (profile.metadata.sceneState ?? {}) as Record<string, unknown>;
-        const renderSize = Number(sceneState.renderSize ?? 0);
-        const positionX = Number(sceneState.positionX ?? 0);
-        const positionY = Number(sceneState.positionY ?? 0);
+        let renderSize = Number(sceneState.renderSize ?? 0);
+        let positionX = Number(sceneState.positionX ?? 0);
+        let positionY = Number(sceneState.positionY ?? 0);
+        const supabaseHasBadSceneState = !Number.isFinite(renderSize) || renderSize <= 0;
+
+        // Fallback: if Supabase sceneState is missing/zero (e.g. saved before the race-condition
+        // fix), try to recover values from localStorage.
+        if (supabaseHasBadSceneState && localById.has(profile.treeId)) {
+          const local = localById.get(profile.treeId)!;
+          renderSize = local.size;
+          positionX = local.worldX;
+          positionY = local.worldY;
+        }
+
         if (!Number.isFinite(renderSize) || renderSize <= 0) continue;
         if (!Number.isFinite(positionX) || !Number.isFinite(positionY)) continue;
 
         const tag = typeof profile.metadata.tag === 'string' ? profile.metadata.tag : undefined;
+
+        // If this tree was already restored from localStorage (mount effect ran first),
+        // skip re-adding it to the store/trees, but still repair Supabase if sceneState was bad.
+        if (existingAgentIds.has(profile.treeId)) {
+          if (supabaseHasBadSceneState) {
+            // Repair the corrupted sceneState in Supabase now that we have valid values.
+            const agent = useForestStore.getState().agents.find((a) => a.id === profile.treeId);
+            if (agent) {
+              void upsertTreeProfile(agent, {
+                sceneState: { renderSize, positionX, positionY, spawnType: 'manual' },
+              });
+            }
+          }
+          continue;
+        }
 
         storeAddTree({
           id: profile.treeId,
@@ -2985,6 +3288,7 @@ export default function Index() {
                 shakePromptSignal={treeShakePromptSignalById[tree.id] ?? 0}
                 onTreeClick={handleTreeActivate}
                 onDeleteTree={profile.isManual ? handleDeleteTree : undefined}
+                fading={fadingTreeIds.has(tree.id)}
               />
             );
           })}
@@ -3267,7 +3571,109 @@ export default function Index() {
           </AnimatePresence>
         </div>
 
+        {/* ── Visit Random Forest ── */}
+        <motion.button
+          type="button"
+          onClick={() => {
+            if (!username) {
+              setLoginModalOpen(true);
+              showTreeNotice('请先登录', '登录后才能探访他人的森林哦', '🔐', 2400);
+              return;
+            }
+            setForestDirectoryOpen(true);
+          }}
+          whileTap={{ scale: 0.95 }}
+          disabled={isVisitTransitioning}
+          className="font-ui text-xs flex items-center gap-1.5"
+          style={{
+            borderRadius: 999,
+            background: currentForestOwner
+              ? 'linear-gradient(145deg,rgba(200,245,218,0.98),rgba(228,255,236,0.98))'
+              : isVisitTransitioning
+              ? 'linear-gradient(155deg,rgba(240,240,240,0.88),rgba(255,255,255,0.80))'
+              : 'linear-gradient(155deg,rgba(230,250,238,0.88),rgba(255,255,255,0.80))',
+            border: `1.5px solid ${currentForestOwner ? 'rgba(60,160,100,0.52)' : 'rgba(80,160,120,0.38)'}`,
+            backdropFilter: 'blur(7px)',
+            boxShadow: '0 4px 14px rgba(36,120,80,0.10)',
+            padding: '7px 13px',
+            color: 'hsl(152,28%,22%)',
+            opacity: isVisitTransitioning ? 0.6 : 1,
+            cursor: isVisitTransitioning ? 'wait' : 'pointer',
+          }}
+        >
+          {isVisitTransitioning
+            ? <span>⏳</span>
+            : <Sparkles size={13} style={{ flexShrink: 0 }} />
+          }
+          <span>{isVisitTransitioning ? '传送中…' : '奇遇森林'}</span>
+        </motion.button>
+
       </div>
+
+      {/* ── Forest Attribution Banner ── */}
+      <AnimatePresence>
+        {currentForestOwner && (
+          <motion.div
+            key="forest-attribution"
+            initial={{ opacity: 0, y: -16, scale: 0.94 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -12, scale: 0.96 }}
+            transition={{ type: 'spring', stiffness: 280, damping: 22 }}
+            className="fixed z-40"
+            style={{
+              top: 14,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '8px 10px 8px 14px',
+              borderRadius: 999,
+              background: 'linear-gradient(145deg,rgba(200,245,220,0.97),rgba(230,255,240,0.95))',
+              border: '1.5px solid rgba(50,170,90,0.46)',
+              backdropFilter: 'blur(12px)',
+              boxShadow: '0 8px 24px rgba(20,100,52,0.18), 0 0 0 1px rgba(255,255,255,0.46) inset',
+              pointerEvents: 'auto',
+            }}
+          >
+            <Sparkles size={14} color="hsl(152,48%,28%)" style={{ flexShrink: 0 }} />
+            <span
+              className="font-ui"
+              style={{ fontSize: 12, color: 'hsl(152,32%,20%)', whiteSpace: 'nowrap', fontWeight: 600 }}
+            >
+              正在探访：<strong>{currentForestOwner.ownerName}</strong> 的幻想森林
+            </span>
+            <motion.button
+              type="button"
+              onClick={returnToOwnForest}
+              whileTap={{ scale: 0.92 }}
+              whileHover={{ y: -1 }}
+              className="font-ui text-xs flex items-center gap-1"
+              style={{
+                borderRadius: 999,
+                border: '1.5px solid rgba(50,160,90,0.46)',
+                padding: '5px 12px',
+                background: 'linear-gradient(145deg,rgba(255,255,255,0.88),rgba(240,255,246,0.82))',
+                color: 'hsl(152,36%,22%)',
+                cursor: 'pointer',
+                fontWeight: 600,
+                boxShadow: '0 2px 8px rgba(30,120,60,0.12)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              🏡 回我的森林
+            </motion.button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Forest Directory Modal ── */}
+      <ForestDirectory
+        open={forestDirectoryOpen}
+        onClose={() => setForestDirectoryOpen(false)}
+        onSelectOwner={(entry) => void visitForest(entry)}
+        currentOwnerId={currentForestOwner?.ownerId ?? null}
+      />
 
       {/* Planting ghost */}
       {plantingImage && (
@@ -3315,6 +3721,13 @@ export default function Index() {
         visibleTreeIds={visibleTreeIds}
         activeZoneLabel={activeEcologyZone.label}
         onDeleteTree={handleDeleteTree}
+        showLeafPulse={leafPulse}
+        onCollectionOpen={() => {
+          if (leafPulse) {
+            markCollectionOpened();
+            setLeafPulse(false);
+          }
+        }}
       />
 
       <AnimatePresence>
@@ -3398,6 +3811,46 @@ export default function Index() {
         onClose={() => setDrawingOpen(false)}
         onPlant={handlePlant}
       />
+
+      {/* ── Visit Transition Overlay ── */}
+      <AnimatePresence>
+        {isVisitTransitioning && (
+          <motion.div
+            key="visit-transition"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.55, ease: 'easeInOut' }}
+            className="fixed inset-0 pointer-events-none z-[200] flex flex-col items-center justify-center"
+            style={{
+              background: 'radial-gradient(ellipse at center, rgba(20,60,38,0.82) 0%, rgba(8,28,18,0.92) 100%)',
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.7, opacity: 0 }}
+              animate={{ scale: [0.7, 1.1, 1], opacity: 1 }}
+              transition={{ duration: 0.7, ease: 'easeOut' }}
+              style={{ fontSize: 56, lineHeight: 1 }}
+            >
+              🌲
+            </motion.div>
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.25, duration: 0.4 }}
+              className="font-ui"
+              style={{
+                marginTop: 18,
+                fontSize: 16,
+                color: 'rgba(210,245,225,0.92)',
+                letterSpacing: '0.06em',
+              }}
+            >
+              正在传送到陌生的森林…
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

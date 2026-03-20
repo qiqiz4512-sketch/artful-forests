@@ -36,6 +36,7 @@ interface Props {
   onTreeClick?: (agentId: string) => void;
   shakePromptSignal?: number;
   isAwaitingReply?: boolean;
+  fading?: boolean;
 }
 
 const TREE_SHAKE_BUBBLE_MS = 2400;
@@ -265,7 +266,18 @@ const getGrowthSpring = (shapeId?: string) => {
 };
 
 const ADORATION_DETECTION_RANGE = 300;
-export default function PlantedTree({ imageData, x, y, size, season = 'spring', isNew, growthMode = 'ambient', minY, maxY, agentId, profile, highlighted = false, active = false, onTreeClick, shakePromptSignal = 0, isAwaitingReply = false }: Props) {
+
+interface DissolveParticle {
+  id: number;
+  left: string;
+  top: string;
+  sizePx: number;
+  delay: number;
+  driftX: number;
+  sinkDistance: number;
+}
+
+export default function PlantedTree({ imageData, x, y, size, season = 'spring', isNew, growthMode = 'ambient', minY, maxY, agentId, profile, highlighted = false, active = false, onTreeClick, shakePromptSignal = 0, isAwaitingReply = false, fading = false }: Props) {
   const [isHovered, setIsHovered] = useState(false);
   const hoverLeaveTimerRef = useRef<number | null>(null);
 
@@ -314,6 +326,23 @@ export default function PlantedTree({ imageData, x, y, size, season = 'spring', 
   const [sceneHoverToken, setSceneHoverToken] = useState<number | null>(null);
   const [sceneTriggerKind, setSceneTriggerKind] = useState<SceneInteractionKind | null>(null);
   const [sceneTriggerToken, setSceneTriggerToken] = useState<number | null>(null);
+  const [dissolveParticles, setDissolveParticles] = useState<DissolveParticle[]>([]);
+
+  // Generate dissolution particles when fading begins
+  useEffect(() => {
+    if (!fading) return;
+    const count = 15 + Math.floor(Math.random() * 6);
+    const particles: DissolveParticle[] = Array.from({ length: count }, (_, i) => ({
+      id: i,
+      left: `${-35 + Math.random() * 170}%`,
+      top: `${-20 + Math.random() * 110}%`,
+      sizePx: 2 + Math.random() * 3,
+      delay: Math.random() * 1.6,
+      driftX: (Math.random() - 0.5) * 140,
+      sinkDistance: 180 + Math.random() * 180,
+    }));
+    setDissolveParticles(particles);
+  }, [fading]);
 
   const groundY = y + size;
   const depth = getTreeDepthMetrics(groundY, minY, maxY);
@@ -740,11 +769,13 @@ export default function PlantedTree({ imageData, x, y, size, season = 'spring', 
         transform: `scale(${depth.perspectiveScale})`,
         transformOrigin: 'bottom center',
         zIndex: hasActiveBubble ? 9000 : depth.zIndex,
+        pointerEvents: fading ? 'none' : undefined,
+        overflow: 'visible',
       }}
     >
       <motion.div
         layout
-        className="relative w-full h-full"
+        className={`relative w-full h-full${fading ? ' tree-dissolving' : ''}`}
         initial={{ scale: entryInitialScale, opacity: entryInitialOpacity, y: 20 }}
         animate={{
           y: shouldGrowIn ? 0 : 20,
@@ -1256,6 +1287,23 @@ export default function PlantedTree({ imageData, x, y, size, season = 'spring', 
         </AnimatePresence>
 
       </motion.div>
+
+      {/* 树木归还大地：粒子消散层 */}
+      {dissolveParticles.map((p) => (
+        <div
+          key={p.id}
+          className="dissolving-particle"
+          style={{
+            left: p.left,
+            top: p.top,
+            width: p.sizePx,
+            height: p.sizePx,
+            animationDelay: `${p.delay}s`,
+            ['--drift-x' as string]: `${p.driftX}px`,
+            ['--sink-distance' as string]: `${p.sinkDistance}px`,
+          }}
+        />
+      ))}
     </div>
   );
 }

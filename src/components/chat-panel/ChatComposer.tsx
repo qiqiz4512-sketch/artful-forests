@@ -331,7 +331,7 @@ export function ChatComposer({
           onKeyDown={handleKeyDown}
           placeholder={activeAgentName
             ? (messageTypeFilter === 'a2a' ? `在群聊里 @${displayName(activeAgentName)} 说点什么...` : `向 ${displayName(activeAgentName)} 说点什么...`)
-            : (messageTypeFilter === 'a2a' ? '不 @任何树也可以直接发言，全部树木都会回应你' : '先点击一棵树激活输入')}
+            : (messageTypeFilter === 'a2a' ? '开始和树木聊天吧～' : '先点击一棵树激活输入')}
           rows={2}
           style={{
             flex: 1,

@@ -1,5 +1,6 @@
-import { CSSProperties } from 'react';
-import { motion } from 'framer-motion';
+import { CSSProperties, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Leaf } from 'lucide-react';
 import { getPersonaLabel } from '@/constants/personaMatrix';
 import { ChatHistoryEntry, TreeAgent } from '@/types/forest';
 import { TreeAvatarIcon } from './TreeAvatarIcon';
@@ -242,6 +243,7 @@ export function ChatMessageItem({
   onRegisterMessageRef,
   formatAgo,
 }: ChatMessageItemProps) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const personality = speaker?.personality ?? '温柔';
   const bubbleColor = PERSONALITY_COLOR[personality] ?? '#6a997b';
   const personaLabel = getPersonaLabel(personality);
@@ -351,21 +353,133 @@ export function ChatMessageItem({
           {isManualSpeaker && onDeleteTree && (
             <button
               type="button"
-              onClick={() => onDeleteTree(entry.speakerId)}
+              onClick={() => setConfirmDelete(true)}
               className="self-center flex items-center gap-1.5 px-3 py-1"
               style={{
                 borderRadius: 999,
-                background: 'rgba(239, 68, 68, 0.12)',
-                border: '1px solid rgba(239, 68, 68, 0.38)',
-                color: 'rgba(220, 60, 60, 0.9)',
+                background: 'rgba(80, 160, 100, 0.1)',
+                border: '1px solid rgba(80, 160, 100, 0.35)',
+                color: 'rgba(60, 130, 80, 0.9)',
                 fontSize: 11,
                 cursor: 'pointer',
               }}
             >
-              <span style={{ fontSize: 13, lineHeight: 1 }}>×</span>
-              移除这棵神启树
+              <Leaf size={12} />
+              归还大地
             </button>
           )}
+          {/* 二次确认弹窗 */}
+          <AnimatePresence>
+            {confirmDelete && (
+              <>
+                <motion.div
+                  key="epic-confirm-backdrop"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.16 }}
+                  style={{
+                    position: 'fixed',
+                    inset: 0,
+                    zIndex: 200,
+                    background: 'rgba(12, 28, 18, 0.28)',
+                    backdropFilter: 'blur(6px)',
+                    WebkitBackdropFilter: 'blur(6px)',
+                  }}
+                  onClick={() => setConfirmDelete(false)}
+                />
+                <motion.div
+                  key="epic-confirm-dialog"
+                  initial={{ opacity: 0, scale: 0.88, y: 16 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.92, y: 10 }}
+                  transition={{ type: 'spring', stiffness: 340, damping: 28 }}
+                  style={{
+                    position: 'fixed',
+                    left: '50vw',
+                    top: '50vh',
+                    translateX: '-50%',
+                    translateY: '-50%',
+                    zIndex: 201,
+                    width: 'min(320px, 88vw)',
+                    borderRadius: 20,
+                    background: 'rgba(235, 252, 242, 0.38)',
+                    backdropFilter: 'blur(20px) saturate(1.4)',
+                    WebkitBackdropFilter: 'blur(20px) saturate(1.4)',
+                    border: '1px solid rgba(255,255,255,0.45)',
+                    boxShadow: '0 8px 40px rgba(12,60,30,0.18), 0 0 0 1px rgba(255,255,255,0.28) inset',
+                    padding: '28px 24px 22px',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontSize: 32, marginBottom: 12 }}>🍃</div>
+                  <div
+                    style={{
+                      fontFamily: 'var(--font-handwritten)',
+                      fontSize: 15,
+                      color: 'rgba(255,255,255,0.92)',
+                      lineHeight: 1.75,
+                      marginBottom: 20,
+                      textShadow: '0 1px 6px rgba(0,0,0,0.25)',
+                    }}
+                  >
+                    这棵树已经完成了它的使命，
+                    <br />
+                    要让它化作森林的养分，
+                    <br />
+                    去开启新的奇遇吗？
+                  </div>
+                  <div className="flex gap-3 justify-center">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(false)}
+                      style={{
+                        flex: 1,
+                        maxWidth: 110,
+                        padding: '9px 0',
+                        borderRadius: 999,
+                        background: 'rgba(255,255,255,0.18)',
+                        border: '1px solid rgba(255,255,255,0.38)',
+                        color: 'rgba(255,255,255,0.88)',
+                        fontSize: 13,
+                        cursor: 'pointer',
+                        backdropFilter: 'blur(4px)',
+                        WebkitBackdropFilter: 'blur(4px)',
+                      }}
+                    >
+                      再想想
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onDeleteTree(entry.speakerId);
+                        setConfirmDelete(false);
+                      }}
+                      style={{
+                        flex: 1,
+                        maxWidth: 110,
+                        padding: '9px 0',
+                        borderRadius: 999,
+                        background: 'linear-gradient(135deg, rgba(80,160,100,0.88), rgba(60,130,80,0.82))',
+                        border: '1px solid rgba(60,150,90,0.45)',
+                        color: '#fff',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                      }}
+                    >
+                      <Leaf size={13} />
+                      归还大地
+                    </button>
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
         </div>
       </motion.div>
     );

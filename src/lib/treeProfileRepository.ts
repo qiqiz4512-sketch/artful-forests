@@ -137,7 +137,10 @@ const invokeTreeProfilesFunction = async <T>(
   return (data ?? null) as T | null;
 };
 
-const toProfilePayload = (agent: TreeAgent, sceneState?: TreeSceneState) => ({
+const toProfilePayload = (agent: TreeAgent, sceneState?: TreeSceneState) => {
+  const session = loadSecondMeSession();
+  const ownerNickname = session?.user?.name ?? session?.user?.route ?? session?.user?.email ?? null;
+  return {
   tree_id: agent.id,
   name: agent.name,
   personality: agent.personality,
@@ -156,8 +159,10 @@ const toProfilePayload = (agent: TreeAgent, sceneState?: TreeSceneState) => ({
     ...agent.metadata,
     tag: agent.tag ?? null,
     sceneState: sceneState ?? (agent.metadata as Record<string, unknown>).sceneState ?? null,
+    ...(ownerNickname ? { ownerNickname } : {}),
   },
-});
+  };
+};
 
 const mapProfileRow = (data: any): PersistedTreeProfile => ({
   treeId: data.tree_id,
@@ -193,6 +198,36 @@ export const fetchTreeProfile = async (treeId: string): Promise<PersistedTreePro
 
 export const fetchAllTreeProfiles = async (): Promise<PersistedTreeProfile[]> => {
   const data = await invokeTreeProfilesFunction<any[]>('fetchAllTreeProfiles');
+  return (data ?? []).map((row) => mapProfileRow(row));
+};
+
+export interface ForestOwnerInfo {
+  ownerId: string;
+  ownerName: string;
+}
+
+export interface ForestDirectoryEntry extends ForestOwnerInfo {
+  treeCount: number;
+  isSelf: boolean;
+}
+
+export const refreshOwnerNickname = async (nickname: string): Promise<void> => {
+  if (!nickname) return;
+  await invokeTreeProfilesFunction<{ updated: number }>('refreshOwnerNickname', { nickname });
+};
+
+export const fetchRandomForestOwner = async (): Promise<ForestOwnerInfo | null> => {
+  const data = await invokeTreeProfilesFunction<ForestOwnerInfo | null>('fetchRandomForestOwner');
+  return data ?? null;
+};
+
+export const fetchForestDirectory = async (): Promise<ForestDirectoryEntry[]> => {
+  const data = await invokeTreeProfilesFunction<ForestDirectoryEntry[]>('fetchForestDirectory');
+  return data ?? [];
+};
+
+export const fetchTreeProfilesByOwner = async (ownerId: string): Promise<PersistedTreeProfile[]> => {
+  const data = await invokeTreeProfilesFunction<any[]>('fetchTreeProfilesByOwner', { ownerId });
   return (data ?? []).map((row) => mapProfileRow(row));
 };
 

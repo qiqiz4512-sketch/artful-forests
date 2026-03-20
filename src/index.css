@@ -1099,4 +1099,73 @@
       transform: translateX(4px);
     }
   }
+
+  /* ── 树木归还大地：粒子消散动画 ────────────────────────────── */
+
+  @keyframes glimmer-and-sink {
+    0% {
+      opacity: 0;
+      transform: translateX(0) translateY(0) scale(0.3);
+      box-shadow: 0 0 2px 1px rgba(180, 150, 60, 0.25);
+    }
+    20% {
+      opacity: 0.45;
+      transform: translateX(calc(var(--drift-x, 0px) * 0.25)) translateY(8px) scale(0.9);
+      box-shadow: 0 0 4px 2px rgba(200, 170, 70, 0.4);
+    }
+    35% {
+      opacity: 0.55;
+      transform: translateX(calc(var(--drift-x, 0px) * 0.5)) translateY(16px) scale(1);
+      box-shadow: 0 0 5px 2px rgba(200, 165, 55, 0.45);
+    }
+    100% {
+      opacity: 0;
+      transform: translateX(var(--drift-x, 0px)) translateY(var(--sink-distance, 240px)) scale(0.12);
+      box-shadow: 0 0 1px 0px rgba(180, 140, 20, 0);
+    }
+  }
+
+  @keyframes tree-dissolve-downward {
+    0% {
+      mask-image: linear-gradient(to bottom, black 100%, transparent 100%);
+      -webkit-mask-image: linear-gradient(to bottom, black 100%, transparent 100%);
+      opacity: 1;
+    }
+    35% {
+      mask-image: linear-gradient(to bottom, black 55%, rgba(0,0,0,0.6) 75%, transparent 100%);
+      -webkit-mask-image: linear-gradient(to bottom, black 55%, rgba(0,0,0,0.6) 75%, transparent 100%);
+      opacity: 0.88;
+    }
+    70% {
+      mask-image: linear-gradient(to bottom, black 10%, rgba(0,0,0,0.3) 38%, transparent 72%);
+      -webkit-mask-image: linear-gradient(to bottom, black 10%, rgba(0,0,0,0.3) 38%, transparent 72%);
+      opacity: 0.45;
+    }
+    100% {
+      mask-image: linear-gradient(to bottom, transparent 0%, transparent 100%);
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 100%);
+      opacity: 0;
+    }
+  }
+
+  .dissolving-particle {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    background: radial-gradient(
+      circle at 35% 35%,
+      rgba(230, 210, 155, 0.72) 0%,
+      rgba(195, 165, 80, 0.45) 55%,
+      rgba(160, 120, 40, 0.08) 100%
+    );
+    box-shadow: 0 0 3px 1px rgba(200, 165, 60, 0.3);
+    opacity: 0;
+    animation: glimmer-and-sink 3.2s ease-in forwards;
+    will-change: transform, opacity;
+  }
+
+  .tree-dissolving {
+    animation: tree-dissolve-downward 1.8s ease-in forwards;
+    pointer-events: none;
+  }
 }
