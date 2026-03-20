@@ -3360,7 +3360,7 @@ export default function Index() {
 
       <ForestLoginModal
         open={loginModalOpen}
-        ssoLabel="使用 SecondMe 单点登录"
+        ssoLabel="采用 SecondMe 登录"
         ssoSubmitting={ssoSubmitting}
         ssoDisabled={Boolean(authConfigErrorMessage)}
         errorMessage={loginError || authConfigErrorMessage}

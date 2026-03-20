@@ -7,3 +7,6 @@ verify_jwt = false
 
 [functions.secondme-tree-profiles]
 verify_jwt = false
+
+[functions.forest-mcp]
+verify_jwt = false
